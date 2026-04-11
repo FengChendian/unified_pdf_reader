@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ide__getDiagnostics",
+      "Bash(flutter analyze:*)",
+      "Bash(flutter pub:*)",
+      "WebSearch",
+      "WebFetch(domain:pub.dev)"
+    ]
+  }
+}
