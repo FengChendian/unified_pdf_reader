@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:ffi' as ffi;
+import 'dart:ui' as ui;
 import 'package:ffi/ffi.dart' as ffi_pkg;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
@@ -12,7 +13,7 @@ import 'package:crypto/crypto.dart';
 import 'package:pdfium_flutter/pdfium_flutter.dart';
 import 'pdf_reader_event.dart';
 import 'pdf_reader_state.dart';
-import 'package:flutter/rendering.dart';
+
 class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
   Isolate? _pdfIsolate;
   ReceivePort? _pdfReceivePort;
@@ -24,10 +25,55 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
 
   List<double> _detectionLineHeights = [];
 
+  Timer? _hideIndicatorTimer;
+
   static const double _separatorHeight = 10.0;
   static const double _verticalPadding = 5.0;
 
-  /// 计算检测线位置的实际高度
+
+
+  final PageController pageController = PageController();
+  final ScrollController vScrollController = ScrollController();
+  final GlobalKey listViewKey = GlobalKey();
+
+  Function(double scale)? onRestoreScrollAfterScale;
+
+  PdfReaderBloc() : super(const PdfReaderState()) {
+    on<PickPdfEvent>(_onPickPdf);
+    on<PdfLoadStartedEvent>(_onPdfLoadStarted);
+    on<PdfLoadedSuccessEvent>(_onPdfLoadedSuccess);
+    on<PdfLoadedFailureEvent>(_onPdfLoadedFailure);
+    on<PageChangedEvent>(_onPageChanged);
+    on<ScaleChangedEvent>(_onScaleChanged);
+    on<CtrlPressedEvent>(_onCtrlPressed);
+    on<PageSizeMeasuredEvent>(_onPageSizeMeasured);
+    on<PageRenderRequested>(_onPageRenderRequested);
+
+    on<ErrorEvent>(_onError);
+    on<ClearErrorEvent>(_onClearError);
+    on<ClosePdfEvent>(_onClosePdf);
+    on<ShowPageIndicatorEvent>(_onShowPageIndicator);
+    on<HidePageIndicatorEvent>(_onHidePageIndicator);
+    on<PageImageRenderedEvent>(_onPageImageRendered);
+    on<PageImageClearedEvent>(_onPageImageCleared);
+    on<ClearAllImagesEvent>(_onClearAllImages);
+    on<ViewportWidthChangedEvent>(_onViewportWidthChanged);
+
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+    vScrollController.addListener(_onScrollChanged);
+  }
+
+  @override
+  Future<void> close() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    _hideIndicatorTimer?.cancel();
+    _closePdf();
+    pageController.dispose();
+    vScrollController.dispose();
+    return super.close();
+  }
+
+    /// 计算检测线位置的实际高度
   ///
   /// [ratio] - 检测线位置，0.0 表示每个组件顶部，1.0 表示每个组件底部
   /// 返回所有页面在检测线位置的实际高度数组（最后一个元素是列表底部padding之后的位置）
@@ -67,39 +113,6 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
     return result;
   }
 
-  final PageController pageController = PageController();
-  final ScrollController vScrollController = ScrollController();
-  final GlobalKey listViewKey = GlobalKey();
-
-  Function(double scale)? onRestoreScrollAfterScale;
-
-  PdfReaderBloc() : super(const PdfReaderState()) {
-    on<PickPdfEvent>(_onPickPdf);
-    on<PdfLoadStartedEvent>(_onPdfLoadStarted);
-    on<PdfLoadedSuccessEvent>(_onPdfLoadedSuccess);
-    on<PdfLoadedFailureEvent>(_onPdfLoadedFailure);
-    on<PageChangedEvent>(_onPageChanged);
-    on<ScaleChangedEvent>(_onScaleChanged);
-    on<CtrlPressedEvent>(_onCtrlPressed);
-    on<PageSizeMeasuredEvent>(_onPageSizeMeasured);
-
-    on<ErrorEvent>(_onError);
-    on<ClearErrorEvent>(_onClearError);
-    on<ClosePdfEvent>(_onClosePdf);
-
-    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
-    vScrollController.addListener(_onScrollChanged);
-  }
-
-  @override
-  Future<void> close() {
-    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
-    _closePdf();
-    pageController.dispose();
-    vScrollController.dispose();
-    return super.close();
-  }
-
   bool _handleKeyEvent(KeyEvent event) {
     final isCtrl = HardwareKeyboard.instance.logicalKeysPressed.any(
       (key) =>
@@ -115,7 +128,36 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
     return false;
   }
 
+  Future<void> _onPageRenderRequested(
+    PageRenderRequested event,
+    Emitter<PdfReaderState> emit,
+  ) async {
+    // final bloc = context.read<PdfReaderBloc>();
+    final dpr = event.devicePixelRatio;
+    final renderScale = event.scale * dpr;
 
+    final result = await renderPage(event.pageIndex, scale: renderScale);
+
+    if (result != null && result['success']) {
+      ui.decodeImageFromPixels(
+        result['data'],
+        result['width'],
+        result['height'],
+        ui.PixelFormat.rgba8888,
+        (img) {
+          final newPageImages = Map<int, ui.Image>.of(state.pageImages);
+          newPageImages[event.pageIndex] = img;
+          emit(state.copyWith(pageImages: newPageImages));
+          // bloc.add(
+          //   PageImageRenderedEvent(pageIndex: event.pageIndex, image: img),
+          // );
+          // WidgetsBinding.instance.addPostFrameCallback((_) {
+          //   // _measureSize();
+          // });
+        },
+      );
+    }
+  }
 
   void _onScrollChanged() {
     _updateCurrentPage();
@@ -126,7 +168,7 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
     if (_detectionLineHeights.isEmpty) return;
 
     final scrollOffset = vScrollController.offset;
-    
+
     int newPage = 0;
 
     for (int i = 0; i < _detectionLineHeights.length - 1; i++) {
@@ -165,7 +207,6 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
       add(ScaleChangedEvent(targetScale));
       restoreScrollAfterScale(_oldScale, targetScale);
     } else {
-
       if (vScrollController.hasClients) {
         _scrollOffset = vScrollController.offset;
         _mouseY = event.localPosition.dy;
@@ -177,7 +218,7 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
     if (!vScrollController.hasClients) return;
 
     const double topPadding = 5.0;
-    const double bottomPadding = 5.0;
+    // const double bottomPadding = 5.0;
     const double separatorHeight = 10.0;
 
     // print(state.currentPage);
@@ -193,12 +234,11 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
 
     final double pureContentYNew = pureContentYOld * ratio;
 
-
     // 10. 计算新的 offset 并跳转
     final double newOffset =
         (pureContentYNew + gapsHeightAboveCursor) - _mouseY;
-      // final double newOffset =
-      //     ratio * _mouseY;
+    // final double newOffset =
+    //     ratio * _mouseY;
     if (newOffset <= 0) {
       vScrollController.jumpTo(0);
       return;
@@ -261,7 +301,8 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
       responsePort.close();
 
       if (initResult['success']) {
-        final pageOriginalSizes = initResult['pageOriginalSizes'] as Map<int, Map<String, double>>? ?? {};
+        final pageOriginalSizes =
+            initResult['pageOriginalSizes'] as Map<int, List<double>>? ?? {};
         add(
           PdfLoadedSuccessEvent(
             filePath: path,
@@ -290,7 +331,9 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
     PdfLoadedSuccessEvent event,
     Emitter<PdfReaderState> emit,
   ) {
-    final pageOriginalSizesCache = {event.fileHash: event.pageOriginalSizes};
+    final Map<String, Map<int, List<double>>> pageOriginalSizesCache = {
+      event.fileHash: event.pageOriginalSizes,
+    };
     emit(
       state.copyWith(
         filePath: event.filePath,
@@ -313,6 +356,7 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
   void _onPageChanged(PageChangedEvent event, Emitter<PdfReaderState> emit) {
     if (event.currentPage != state.currentPage) {
       emit(state.copyWith(currentPage: event.currentPage));
+      add(ShowPageIndicatorEvent());
     }
   }
 
@@ -352,11 +396,102 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
     emit(const PdfReaderState());
   }
 
+  void _onShowPageIndicator(
+    ShowPageIndicatorEvent event,
+    Emitter<PdfReaderState> emit,
+  ) {
+    _hideIndicatorTimer?.cancel();
+    emit(
+      state.copyWith(
+        isPageIndicatorVisible: true,
+        displayedPage: state.currentPage + 1,
+      ),
+    );
+    _hideIndicatorTimer = Timer(const Duration(seconds: 2), () {
+      add(HidePageIndicatorEvent());
+    });
+  }
+
+  void _onHidePageIndicator(
+    HidePageIndicatorEvent event,
+    Emitter<PdfReaderState> emit,
+  ) {
+    emit(state.copyWith(isPageIndicatorVisible: false));
+  }
+
+  void _onPageImageRendered(
+    PageImageRenderedEvent event,
+    Emitter<PdfReaderState> emit,
+  ) {
+    final newPageImages = Map<int, ui.Image>.of(state.pageImages);
+    newPageImages[event.pageIndex] = event.image;
+    emit(state.copyWith(pageImages: newPageImages));
+  }
+
+  void _onPageImageCleared(
+    PageImageClearedEvent event,
+    Emitter<PdfReaderState> emit,
+  ) {
+    final newPageImages = Map<int, ui.Image>.of(state.pageImages);
+    newPageImages[event.pageIndex]?.dispose();
+    newPageImages.remove(event.pageIndex);
+    emit(state.copyWith(pageImages: newPageImages));
+  }
+
+  void _onClearAllImages(
+    ClearAllImagesEvent event,
+    Emitter<PdfReaderState> emit,
+  ) {
+    final newPageImages = Map<int, ui.Image>.from(state.pageImages);
+    for (final image in newPageImages.values) {
+      image.dispose();
+    }
+    emit(state.copyWith(pageImages: {}));
+  }
+
+  void _onViewportWidthChanged(
+    ViewportWidthChangedEvent event,
+    Emitter<PdfReaderState> emit,
+  ) {
+    final newViewportWidth = event.viewportWidth;
+
+    // 判断是否需要切换到横向模式
+
+    bool shouldBeHorizontal = false;
+    // if (state.fileHash != null && newViewportWidth > 0) {
+    //   final pageSizes = state.pageOriginalSizesCache[state.fileHash];
+    //   if (pageSizes != null) {
+    //     for (final pageSize in pageSizes.values) {
+
+    //     }
+
+    //       if (pageWidth > 0 && pageWidth < newViewportWidth) {
+    //         shouldBeHorizontal = false;
+    //         break;
+    //       } else {
+    //         shouldBeHorizontal = true;
+    //         break;
+    //       }
+    //   }
+    // }
+
+    emit(
+      state.copyWith(
+        viewportWidth: newViewportWidth,
+        isHorizontalMode: shouldBeHorizontal,
+      ),
+    );
+  }
+
   void _closePdf() {
     _pdfReceivePort?.close();
     _pdfIsolate?.kill(priority: Isolate.immediate);
     _pdfIsolate = null;
     _pdfSendPort = null;
+    // Clear all page images
+    for (final image in state.pageImages.values) {
+      image.dispose();
+    }
   }
 
   Future<Map<String, dynamic>?> renderPage(
@@ -383,7 +518,7 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
     pdfiumBindings.FPDF_InitLibrary();
     FPDF_DOCUMENT? doc;
     ffi.Pointer<ffi.Uint8>? fileBuffer;
-    Map<int, Map<String, double>>? pageOriginalSizes;
+    Map<int, List<double>>? pageOriginalSizes;
 
     childReceivePort.listen((message) {
       final String type = message['type'];
@@ -406,13 +541,13 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
           replyPort.send({'success': false, 'error': 'PDF 载入失败'});
         } else {
           final pageCount = pdfiumBindings.FPDF_GetPageCount(doc!);
-          pageOriginalSizes = <int, Map<String, double>>{};
+          pageOriginalSizes = <int, List<double>>{};
           for (int i = 0; i < pageCount; i++) {
             final page = pdfiumBindings.FPDF_LoadPage(doc!, i);
-            pageOriginalSizes![i] = {
-              'width': pdfiumBindings.FPDF_GetPageWidthF(page),
-              'height': pdfiumBindings.FPDF_GetPageHeightF(page),
-            };
+            pageOriginalSizes![i] = [
+              pdfiumBindings.FPDF_GetPageWidthF(page),
+              pdfiumBindings.FPDF_GetPageHeightF(page),
+            ];
             pdfiumBindings.FPDF_ClosePage(page);
           }
           replyPort.send({
@@ -424,13 +559,13 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
       } else if (type == 'render') {
         if (doc == null || pageOriginalSizes == null) return;
         final int index = message['pageIndex'];
-        final double scale = message['scale'] ?? 1.0;
+        final double scale = (message['scale'] ?? 1.0);
         final sizes = pageOriginalSizes!;
 
         final page = pdfiumBindings.FPDF_LoadPage(doc!, index);
         final pageSize = sizes[index];
-        final double originalWidth = pageSize!['width']!;
-        final double originalHeight = pageSize['height']!;
+        final double originalWidth = pageSize![0];
+        final double originalHeight = pageSize[1];
 
         final int width = (originalWidth * scale).ceil();
         final int height = (originalHeight * scale).ceil();
@@ -452,7 +587,7 @@ class PdfReaderBloc extends Bloc<PdfReaderEvent, PdfReaderState> {
           width,
           height,
           0,
-          0x02 | 0x01 | 0x400,
+          0x02 | 0x01 | 0x04,
         );
 
         final buffer = pdfiumBindings.FPDFBitmap_GetBuffer(bitmap);

@@ -60,7 +60,8 @@ class PdfReaderPage extends StatelessWidget {
                   right: 16,
                   bottom: 16,
                   child: _PageIndicator(
-                    currentPage: state.currentPage + 1,
+                    isVisible: state.isPageIndicatorVisible,
+                    displayedPage: state.displayedPage,
                     totalPages: state.totalPages,
                   ),
                 ),
@@ -90,24 +91,94 @@ class PdfReaderPage extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
+        // 通知 bloc 视口宽度变化
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (constraints.maxWidth > 0 &&
+              constraints.maxWidth != state.viewportWidth) {
+            bloc.add(ViewportWidthChangedEvent(constraints.maxWidth));
+          }
+        });
+
         return Listener(
           onPointerSignal: bloc.handlePointerSignal,
-          child: Container(
-            color: Colors.grey[200],
-            child: ListView.separated(
+          child: state.isHorizontalMode
+              ? _buildHorizontalMode(bloc, state)
+              : _buildVerticalMode(bloc, state),
+        );
+      },
+    );
+  }
+
+  // 横向模式：ListView 水平滚动，多页并排
+  Widget _buildHorizontalMode(PdfReaderBloc bloc, PdfReaderState state) {
+    return ListView(
+      scrollDirection: Axis.horizontal,
+      children: [
+        Container(
+          color: Colors.grey[200],
+          child: Center(
+            child: SingleChildScrollView(
               key: bloc.listViewKey,
               controller: bloc.vScrollController,
               physics: state.isCtrlPressed
                   ? const NeverScrollableScrollPhysics()
                   : const ClampingScrollPhysics(),
-              itemCount: state.totalPages,
-              separatorBuilder: (context, index) => const SizedBox(height: 10),
-              cacheExtent: 2000,
               padding: const EdgeInsets.symmetric(vertical: 5),
-              itemBuilder: (context, index) {
-                return _PdfPageWidget(
-                  key: ValueKey('page_$index'),
-                  pageIndex: index,
+              child: Column(
+                children: [
+                  for (int i = 0; i < state.totalPages; i++) ...[
+                    _PdfPageWidget(
+                      key: ValueKey('page_$i'),
+                      pageIndex: i,
+                      renderPage: bloc.renderPage,
+                      scale: state.globalScale,
+                      onSizeChanged: (pageIndex, height) {
+                        bloc.add(
+                          PageSizeMeasuredEvent(
+                            pageIndex: pageIndex,
+                            height: height,
+                          ),
+                        );
+                      },
+                      onOriginalSizeChanged: (pageIndex, width, height) {
+                        bloc.add(
+                          PageOriginalSizeMeasuredEvent(
+                            pageIndex: pageIndex,
+                            originalWidth: width,
+                            originalHeight: height,
+                          ),
+                        );
+                      },
+                    ),
+                    if (i < state.totalPages - 1) const SizedBox(height: 10),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // 垂直模式：单列垂直滚动
+  Widget _buildVerticalMode(PdfReaderBloc bloc, PdfReaderState state) {
+    return Container(
+      color: Colors.grey[200],
+      child: Center(
+        child: SingleChildScrollView(
+          key: bloc.listViewKey,
+          controller: bloc.vScrollController,
+          physics: state.isCtrlPressed
+              ? const NeverScrollableScrollPhysics()
+              : const ClampingScrollPhysics(),
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          child: Column(
+            children: [
+              for (int i = 0; i < state.totalPages; i++) ...[
+                _PdfPageWidget(
+                  key: ValueKey('page_$i'),
+                  pageIndex: i,
                   renderPage: bloc.renderPage,
                   scale: state.globalScale,
                   onSizeChanged: (pageIndex, height) {
@@ -127,12 +198,13 @@ class PdfReaderPage extends StatelessWidget {
                       ),
                     );
                   },
-                );
-              },
-            ),
+                ),
+                if (i < state.totalPages - 1) const SizedBox(height: 10),
+              ],
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }
@@ -143,7 +215,7 @@ class _PdfPageWidget extends StatefulWidget {
   final double scale;
   final void Function(int pageIndex, double height) onSizeChanged;
   final void Function(int pageIndex, double width, double height)
-      onOriginalSizeChanged;
+  onOriginalSizeChanged;
 
   const _PdfPageWidget({
     super.key,
@@ -159,10 +231,6 @@ class _PdfPageWidget extends StatefulWidget {
 }
 
 class _PdfPageWidgetState extends State<_PdfPageWidget> {
-  ui.Image? _currentImage;
-  bool _isRendering = false;
-  Timer? _debounceTimer;
-  bool _disposed = false;
   double _measuredHeight = 0.0;
   final GlobalKey _sizeKey = GlobalKey();
 
@@ -170,43 +238,23 @@ class _PdfPageWidgetState extends State<_PdfPageWidget> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_disposed) _requestRender();
+      if (mounted) _requestRender();
     });
-  }
-
-  @override
-  void didUpdateWidget(_PdfPageWidget oldWidget) {
-    super.didUpdateWidget(oldWidget);
-
-    if (oldWidget.scale != widget.scale) {
-      _debounceTimer?.cancel();
-      _debounceTimer = Timer(const Duration(milliseconds: 150), () {
-        if (!_disposed) _requestRender();
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _disposed = true;
-    _debounceTimer?.cancel();
-    _currentImage?.dispose();
-    super.dispose();
   }
 
   void _measureSize() {
     final renderBox = _sizeKey.currentContext?.findRenderObject() as RenderBox?;
     final actualHeight = renderBox?.size.height ?? 0;
-    if (!_disposed && actualHeight > 0 && actualHeight != _measuredHeight) {
+    if (mounted && actualHeight > 0 && actualHeight != _measuredHeight) {
       _measuredHeight = actualHeight;
       widget.onSizeChanged(widget.pageIndex, actualHeight);
     }
   }
 
   Future<void> _requestRender() async {
-    if (!mounted || _isRendering) return;
+    if (!mounted) return;
 
-    _isRendering = true;
+    final bloc = context.read<PdfReaderBloc>();
     final dpr = View.of(context).devicePixelRatio;
     final renderScale = widget.scale * dpr;
 
@@ -223,13 +271,11 @@ class _PdfPageWidgetState extends State<_PdfPageWidget> {
         ui.PixelFormat.rgba8888,
         (img) {
           if (mounted) {
-            setState(() {
-              final oldImg = _currentImage;
-              _currentImage = img;
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                oldImg?.dispose();
-                _measureSize();
-              });
+            bloc.add(
+              PageImageRenderedEvent(pageIndex: widget.pageIndex, image: img),
+            );
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _measureSize();
             });
           } else {
             img.dispose();
@@ -237,7 +283,6 @@ class _PdfPageWidgetState extends State<_PdfPageWidget> {
         },
       );
     }
-    _isRendering = false;
   }
 
   @override
@@ -247,16 +292,39 @@ class _PdfPageWidgetState extends State<_PdfPageWidget> {
 
     final bloc = context.read<PdfReaderBloc>();
     final state = bloc.state;
-    final pageSizes = state.pageOriginalSizesCache[state.fileHash]?[widget.pageIndex];
-    final originalWidth = pageSizes?['width'] ?? 0.0;
-    final originalHeight = pageSizes?['height'] ?? 0.0;
+    final pageSizes =
+        state.pageOriginalSizesCache[state.fileHash]?[widget.pageIndex];
+    final originalWidth = pageSizes?[0] ?? 0.0;
+    final originalHeight = pageSizes?[1] ?? 0.0;
 
+    // 使用 BlocListener 监听文件变化
+    return BlocListener<PdfReaderBloc, PdfReaderState>(
+      listenWhen: (previous, current) => previous.fileHash != current.fileHash,
+      listener: (context, state) {
+        _requestRender();
+      },
+      child: _buildPageContent(
+        originalWidth,
+        originalHeight,
+        scale,
+        devicePixelRatio,
+        state.pageImages[widget.pageIndex],
+      ),
+    );
+  }
+
+  Widget _buildPageContent(
+    double originalWidth,
+    double originalHeight,
+    double scale,
+    double devicePixelRatio,
+    ui.Image? pageImage,
+  ) {
     if (originalWidth == 0 || originalHeight == 0) {
       return Center(
         child: Container(
           width: 595 / devicePixelRatio * scale,
           height: 842 / devicePixelRatio * scale,
-          // padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           color: Colors.white,
         ),
       );
@@ -268,100 +336,55 @@ class _PdfPageWidgetState extends State<_PdfPageWidget> {
       height: originalHeight / devicePixelRatio * scale,
       child: FittedBox(
         fit: BoxFit.contain,
-        child: _currentImage == null
+        child: pageImage == null
             ? SizedBox(
                 width: originalWidth / devicePixelRatio * scale,
                 height: originalHeight / devicePixelRatio * scale,
                 child: const ColoredBox(color: Colors.white),
               )
             : RawImage(
-                image: _currentImage,
+                image: pageImage,
                 fit: BoxFit.contain,
-                filterQuality: ui.FilterQuality.high,
+                filterQuality: FilterQuality.high,
+                isAntiAlias: true,
               ),
       ),
     );
   }
 }
 
-class _PageIndicator extends StatefulWidget {
-  final int currentPage;
+class _PageIndicator extends StatelessWidget {
+  final bool isVisible;
+  final int displayedPage;
   final int totalPages;
 
-  const _PageIndicator({required this.currentPage, required this.totalPages});
-
-  @override
-  State<_PageIndicator> createState() => _PageIndicatorState();
-}
-
-class _PageIndicatorState extends State<_PageIndicator>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _opacityAnimation;
-  int _displayedPage = 0;
-  Timer? _hideTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    _displayedPage = widget.currentPage;
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 500),
-      vsync: this,
-    );
-    _opacityAnimation = Tween<double>(
-      begin: 1.0,
-      end: 0.0,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) _controller.forward();
-    });
-  }
-
-  @override
-  void didUpdateWidget(_PageIndicator oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.currentPage != widget.currentPage) {
-      _displayedPage = widget.currentPage;
-      _controller.reset();
-      _hideTimer?.cancel();
-      _hideTimer = Timer(const Duration(seconds: 2), () {
-        if (mounted) _controller.forward();
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _hideTimer?.cancel();
-    _controller.dispose();
-    super.dispose();
-  }
+  const _PageIndicator({
+    required this.isVisible,
+    required this.displayedPage,
+    required this.totalPages,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _opacityAnimation,
-      builder: (context, child) {
-        return Opacity(
-          opacity: _opacityAnimation.value,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.black54,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Text(
-              '$_displayedPage / ${widget.totalPages}',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
+    return AnimatedOpacity(
+      opacity: isVisible ? 1.0 : 0.0,
+      duration: const Duration(milliseconds: 500),
+      curve: Curves.easeOut,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black54,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          '$displayedPage / $totalPages',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }

@@ -1,4 +1,5 @@
 import 'dart:isolate';
+import 'dart:ui' as ui;
 
 class PdfReaderState {
   final String? filePath;
@@ -9,9 +10,16 @@ class PdfReaderState {
   final double globalScale;
   final bool isCtrlPressed;
   final Map<int, double> pageHeights;
-  /// Original page sizes: fileHash -> pageIndex -> {width, height}
-  final Map<String, Map<int, Map<String, double>>> pageOriginalSizesCache;
+  /// Original page sizes: fileHash -> pageIndex -> [width, height]
+  final Map<String, Map<int, List<double>>> pageOriginalSizesCache;
+  
   final SendPort? pdfSendPort;
+  final bool isPageIndicatorVisible;
+  final int displayedPage;
+  /// Rendered page images: pageIndex -> ui.Image
+  final Map<int, ui.Image> pageImages;
+  final double viewportWidth;
+  final bool isHorizontalMode;
 
   const PdfReaderState({
     this.filePath,
@@ -24,6 +32,11 @@ class PdfReaderState {
     this.pageHeights = const {},
     this.pageOriginalSizesCache = const {},
     this.pdfSendPort,
+    this.isPageIndicatorVisible = true,
+    this.displayedPage = 1,
+    this.pageImages = const {},
+    this.viewportWidth = 0.0,
+    this.isHorizontalMode = false,
   });
 
   PdfReaderState copyWith({
@@ -36,8 +49,13 @@ class PdfReaderState {
     double? globalScale,
     bool? isCtrlPressed,
     Map<int, double>? pageHeights,
-    Map<String, Map<int, Map<String, double>>>? pageOriginalSizesCache,
+    Map<String, Map<int, List<double>>>? pageOriginalSizesCache,
     SendPort? pdfSendPort,
+    bool? isPageIndicatorVisible,
+    int? displayedPage,
+    Map<int, ui.Image>? pageImages,
+    double? viewportWidth,
+    bool? isHorizontalMode,
     bool clearFilePath = false,
     bool clearErrorMessage = false,
   }) {
@@ -52,6 +70,11 @@ class PdfReaderState {
       pageHeights: pageHeights ?? this.pageHeights,
       pageOriginalSizesCache: pageOriginalSizesCache ?? this.pageOriginalSizesCache,
       pdfSendPort: pdfSendPort ?? this.pdfSendPort,
+      isPageIndicatorVisible: isPageIndicatorVisible ?? this.isPageIndicatorVisible,
+      displayedPage: displayedPage ?? this.displayedPage,
+      pageImages: pageImages ?? this.pageImages,
+      viewportWidth: viewportWidth ?? this.viewportWidth,
+      isHorizontalMode: isHorizontalMode ?? this.isHorizontalMode,
     );
   }
 }

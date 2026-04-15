@@ -1,4 +1,5 @@
 import 'dart:isolate';
+import 'dart:ui' as ui;
 
 abstract class PdfReaderEvent {}
 
@@ -11,7 +12,7 @@ class PdfLoadedSuccessEvent extends PdfReaderEvent {
   final String fileHash;
   final int totalPages;
   final SendPort pdfSendPort;
-  final Map<int, Map<String, double>> pageOriginalSizes;
+  final Map<int, List<double>> pageOriginalSizes;
 
   PdfLoadedSuccessEvent({
     required this.filePath,
@@ -74,3 +75,52 @@ class ErrorEvent extends PdfReaderEvent {
 class ClearErrorEvent extends PdfReaderEvent {}
 
 class ClosePdfEvent extends PdfReaderEvent {}
+
+class ShowPageIndicatorEvent extends PdfReaderEvent {}
+
+class HidePageIndicatorEvent extends PdfReaderEvent {}
+
+class PageImageRenderedEvent extends PdfReaderEvent {
+  final int pageIndex;
+  final ui.Image image;
+
+  PageImageRenderedEvent({required this.pageIndex, required this.image});
+}
+
+class PageImageClearedEvent extends PdfReaderEvent {
+  final int pageIndex;
+
+  PageImageClearedEvent(this.pageIndex);
+}
+
+class ClearAllImagesEvent extends PdfReaderEvent {}
+
+class ViewportWidthChangedEvent extends PdfReaderEvent {
+  final double viewportWidth;
+
+  ViewportWidthChangedEvent(this.viewportWidth);
+}
+
+
+// 触发页面渲染的事件
+class PageRenderRequested extends PdfReaderEvent {
+  final int pageIndex;
+  final double scale;
+  final double devicePixelRatio;
+  final Function(int, {double scale}) renderPage;
+
+  PageRenderRequested({
+    required this.pageIndex,
+    required this.scale,
+    required this.devicePixelRatio,
+    required this.renderPage,
+  });
+}
+
+// 记录页面高度的事件 (替代原来的 onSizeChanged)
+class PageSizeCalculated extends PdfReaderEvent {
+  final int pageIndex;
+  final double height;
+
+  PageSizeCalculated(this.pageIndex, this.height);
+}
