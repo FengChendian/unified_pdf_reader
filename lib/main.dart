@@ -1,14 +1,15 @@
-import 'dart:async';
-import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
-import 'bloc/pdf_reader_bloc.dart';
-import 'bloc/pdf_reader_event.dart';
-import 'bloc/pdf_reader_state.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'providers/pdf_reader_provider.dart';
 
 void main() {
-  runApp(const PdfReaderApp());
+  runApp(
+    ProviderScope(
+      child: PdfReaderApp(),
+    ),
+  );
 }
 
 class PdfReaderApp extends StatelessWidget {
@@ -16,65 +17,79 @@ class PdfReaderApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (_) => PdfReaderBloc(),
-      child: MaterialApp(
-        title: 'PDF Studio Pro',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
-          useMaterial3: true,
-        ),
-        home: const PdfReaderPage(),
+    return MaterialApp(
+      title: 'PDF Studio Pro',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
+        useMaterial3: true,
       ),
+      home: const PdfReaderPage(),
     );
   }
 }
 
-class PdfReaderPage extends StatelessWidget {
+class PdfReaderPage extends HookConsumerWidget {
   const PdfReaderPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return BlocBuilder<PdfReaderBloc, PdfReaderState>(
-      builder: (context, state) {
-        final bloc = context.read<PdfReaderBloc>();
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(
-              state.filePath?.split(Platform.pathSeparator).last ??
-                  'PDF Studio',
-            ),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.folder_open),
-                onPressed: () => bloc.add(PickPdfEvent()),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(pdfReaderProvider);
+    final notifier = ref.read(pdfReaderProvider.notifier);
+
+    useEffect(() {
+      notifier.initialize();
+      return () => notifier.dispose();
+    }, []);
+
+    final scrollController = useScrollController();
+    final listViewKey = useMemoized(() => notifier.listViewKey, []);
+
+    useEffect(() {
+      void listener() {
+        notifier.onScrollChanged(scrollController);
+      }
+
+      scrollController.addListener(listener);
+      return () => scrollController.removeListener(listener);
+    }, [scrollController]);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          state.filePath?.split('\\').last ?? 'PDF Studio',
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.folder_open),
+            onPressed: () => notifier.pickPdf(View.of(context).devicePixelRatio),
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          _buildBody(context, ref, notifier, scrollController, listViewKey, state),
+          if (state.totalPages > 0)
+            Positioned(
+              right: 16,
+              bottom: 16,
+              child: PageIndicator(
+                isVisible: state.isPageIndicatorVisible,
+                displayedPage: state.displayedPage,
+                totalPages: state.totalPages,
               ),
-            ],
-          ),
-          body: Stack(
-            children: [
-              _buildBody(context, bloc, state),
-              if (state.totalPages > 0)
-                Positioned(
-                  right: 16,
-                  bottom: 16,
-                  child: _PageIndicator(
-                    isVisible: state.isPageIndicatorVisible,
-                    displayedPage: state.displayedPage,
-                    totalPages: state.totalPages,
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
+            ),
+        ],
+      ),
     );
   }
 
   Widget _buildBody(
     BuildContext context,
-    PdfReaderBloc bloc,
+    WidgetRef ref,
+    PdfReaderNotifier notifier,
+    ScrollController scrollController,
+    GlobalKey listViewKey,
     PdfReaderState state,
   ) {
     if (state.errorMessage != null) {
@@ -91,26 +106,30 @@ class PdfReaderPage extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        // 通知 bloc 视口宽度变化
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (constraints.maxWidth > 0 &&
-              constraints.maxWidth != state.viewportWidth) {
-            bloc.add(ViewportWidthChangedEvent(constraints.maxWidth));
-          }
-        });
+        if (constraints.maxWidth > 0 &&
+            constraints.maxWidth != state.viewportWidth) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            notifier.onViewportWidthChanged(constraints.maxWidth);
+          });
+        }
 
         return Listener(
-          onPointerSignal: bloc.handlePointerSignal,
+          onPointerSignal: (event) =>
+              notifier.handlePointerSignal(event, scrollController),
           child: state.isHorizontalMode
-              ? _buildHorizontalMode(bloc, state)
-              : _buildVerticalMode(bloc, state),
+              ? _buildHorizontalMode(notifier, state, scrollController, listViewKey)
+              : _buildVerticalMode(notifier, state, scrollController, listViewKey),
         );
       },
     );
   }
 
-  // 横向模式：ListView 水平滚动，多页并排
-  Widget _buildHorizontalMode(PdfReaderBloc bloc, PdfReaderState state) {
+  Widget _buildHorizontalMode(
+    PdfReaderNotifier notifier,
+    PdfReaderState state,
+    ScrollController scrollController,
+    GlobalKey listViewKey,
+  ) {
     return ListView(
       scrollDirection: Axis.horizontal,
       children: [
@@ -118,8 +137,8 @@ class PdfReaderPage extends StatelessWidget {
           color: Colors.grey[200],
           child: Center(
             child: SingleChildScrollView(
-              key: bloc.listViewKey,
-              controller: bloc.vScrollController,
+              key: listViewKey,
+              controller: scrollController,
               physics: state.isCtrlPressed
                   ? const NeverScrollableScrollPhysics()
                   : const ClampingScrollPhysics(),
@@ -127,28 +146,10 @@ class PdfReaderPage extends StatelessWidget {
               child: Column(
                 children: [
                   for (int i = 0; i < state.totalPages; i++) ...[
-                    _PdfPageWidget(
-                      key: ValueKey('page_$i'),
+                    PdfPageWidget(
+                      key: ValueKey('${state.fileHash}_page_$i'),
                       pageIndex: i,
-                      renderPage: bloc.renderPage,
                       scale: state.globalScale,
-                      onSizeChanged: (pageIndex, height) {
-                        bloc.add(
-                          PageSizeMeasuredEvent(
-                            pageIndex: pageIndex,
-                            height: height,
-                          ),
-                        );
-                      },
-                      onOriginalSizeChanged: (pageIndex, width, height) {
-                        bloc.add(
-                          PageOriginalSizeMeasuredEvent(
-                            pageIndex: pageIndex,
-                            originalWidth: width,
-                            originalHeight: height,
-                          ),
-                        );
-                      },
                     ),
                     if (i < state.totalPages - 1) const SizedBox(height: 10),
                   ],
@@ -161,14 +162,18 @@ class PdfReaderPage extends StatelessWidget {
     );
   }
 
-  // 垂直模式：单列垂直滚动
-  Widget _buildVerticalMode(PdfReaderBloc bloc, PdfReaderState state) {
+  Widget _buildVerticalMode(
+    PdfReaderNotifier notifier,
+    PdfReaderState state,
+    ScrollController scrollController,
+    GlobalKey listViewKey,
+  ) {
     return Container(
       color: Colors.grey[200],
       child: Center(
         child: SingleChildScrollView(
-          key: bloc.listViewKey,
-          controller: bloc.vScrollController,
+          key: listViewKey,
+          controller: scrollController,
           physics: state.isCtrlPressed
               ? const NeverScrollableScrollPhysics()
               : const ClampingScrollPhysics(),
@@ -176,28 +181,10 @@ class PdfReaderPage extends StatelessWidget {
           child: Column(
             children: [
               for (int i = 0; i < state.totalPages; i++) ...[
-                _PdfPageWidget(
+                PdfPageWidget(
                   key: ValueKey('page_$i'),
                   pageIndex: i,
-                  renderPage: bloc.renderPage,
                   scale: state.globalScale,
-                  onSizeChanged: (pageIndex, height) {
-                    bloc.add(
-                      PageSizeMeasuredEvent(
-                        pageIndex: pageIndex,
-                        height: height,
-                      ),
-                    );
-                  },
-                  onOriginalSizeChanged: (pageIndex, width, height) {
-                    bloc.add(
-                      PageOriginalSizeMeasuredEvent(
-                        pageIndex: pageIndex,
-                        originalWidth: width,
-                        originalHeight: height,
-                      ),
-                    );
-                  },
                 ),
                 if (i < state.totalPages - 1) const SizedBox(height: 10),
               ],
@@ -209,107 +196,44 @@ class PdfReaderPage extends StatelessWidget {
   }
 }
 
-class _PdfPageWidget extends StatefulWidget {
+class PdfPageWidget extends HookConsumerWidget {
   final int pageIndex;
-  final Function(int, {double scale}) renderPage;
   final double scale;
-  final void Function(int pageIndex, double height) onSizeChanged;
-  final void Function(int pageIndex, double width, double height)
-  onOriginalSizeChanged;
 
-  const _PdfPageWidget({
+  const PdfPageWidget({
     super.key,
     required this.pageIndex,
-    required this.renderPage,
     required this.scale,
-    required this.onSizeChanged,
-    required this.onOriginalSizeChanged,
   });
 
   @override
-  State<_PdfPageWidget> createState() => _PdfPageWidgetState();
-}
-
-class _PdfPageWidgetState extends State<_PdfPageWidget> {
-  double _measuredHeight = 0.0;
-  final GlobalKey _sizeKey = GlobalKey();
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _requestRender();
-    });
-  }
-
-  void _measureSize() {
-    final renderBox = _sizeKey.currentContext?.findRenderObject() as RenderBox?;
-    final actualHeight = renderBox?.size.height ?? 0;
-    if (mounted && actualHeight > 0 && actualHeight != _measuredHeight) {
-      _measuredHeight = actualHeight;
-      widget.onSizeChanged(widget.pageIndex, actualHeight);
-    }
-  }
-
-  Future<void> _requestRender() async {
-    if (!mounted) return;
-
-    final bloc = context.read<PdfReaderBloc>();
-    final dpr = View.of(context).devicePixelRatio;
-    final renderScale = widget.scale * dpr;
-
-    final result = await widget.renderPage(
-      widget.pageIndex,
-      scale: renderScale,
-    );
-
-    if (result != null && result['success'] && mounted) {
-      ui.decodeImageFromPixels(
-        result['data'],
-        result['width'],
-        result['height'],
-        ui.PixelFormat.rgba8888,
-        (img) {
-          if (mounted) {
-            bloc.add(
-              PageImageRenderedEvent(pageIndex: widget.pageIndex, image: img),
-            );
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _measureSize();
-            });
-          } else {
-            img.dispose();
-          }
-        },
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scale = widget.scale;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(pdfReaderProvider);
+    // final notifier = ref.read(pdfReaderProvider.notifier);
     final devicePixelRatio = View.of(context).devicePixelRatio;
 
-    final bloc = context.read<PdfReaderBloc>();
-    final state = bloc.state;
-    final pageSizes =
-        state.pageOriginalSizesCache[state.fileHash]?[widget.pageIndex];
+    final pageSizes = state.pageOriginalSizesCache[state.fileHash]?[pageIndex];
     final originalWidth = pageSizes?[0] ?? 0.0;
     final originalHeight = pageSizes?[1] ?? 0.0;
 
-    // 使用 BlocListener 监听文件变化
-    return BlocListener<PdfReaderBloc, PdfReaderState>(
-      listenWhen: (previous, current) => previous.fileHash != current.fileHash,
-      listener: (context, state) {
-        _requestRender();
-      },
-      child: _buildPageContent(
-        originalWidth,
-        originalHeight,
-        scale,
-        devicePixelRatio,
-        state.pageImages[widget.pageIndex],
-      ),
+    // useEffect(() {
+    //   if (originalHeight > 0) {
+    //     WidgetsBinding.instance.addPostFrameCallback((_) {
+    //       notifier.onPageSizeMeasured(
+    //         pageIndex,
+    //         originalHeight / devicePixelRatio * scale,
+    //       );
+    //     });
+    //   }
+    //   return null;
+    // }, [originalHeight, scale, devicePixelRatio]);
+
+    return _buildPageContent(
+      originalWidth,
+      originalHeight,
+      scale,
+      devicePixelRatio,
+      state.pageImages[pageIndex],
     );
   }
 
@@ -331,7 +255,6 @@ class _PdfPageWidgetState extends State<_PdfPageWidget> {
     }
 
     return SizedBox(
-      key: _sizeKey,
       width: originalWidth / devicePixelRatio * scale,
       height: originalHeight / devicePixelRatio * scale,
       child: FittedBox(
@@ -345,7 +268,7 @@ class _PdfPageWidgetState extends State<_PdfPageWidget> {
             : RawImage(
                 image: pageImage,
                 fit: BoxFit.contain,
-                filterQuality: FilterQuality.high,
+                filterQuality: FilterQuality.medium,
                 isAntiAlias: true,
               ),
       ),
@@ -353,12 +276,13 @@ class _PdfPageWidgetState extends State<_PdfPageWidget> {
   }
 }
 
-class _PageIndicator extends StatelessWidget {
+class PageIndicator extends StatelessWidget {
   final bool isVisible;
   final int displayedPage;
   final int totalPages;
 
-  const _PageIndicator({
+  const PageIndicator({
+    super.key,
     required this.isVisible,
     required this.displayedPage,
     required this.totalPages,

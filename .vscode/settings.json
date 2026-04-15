@@ -1,0 +1,6 @@
+{
+    "editor.suggest.insertMode": "insert",
+    "[dart]": {
+        "editor.suggest.insertMode": "insert"
+    }
+}
