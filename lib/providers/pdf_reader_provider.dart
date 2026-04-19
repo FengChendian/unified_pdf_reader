@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:ffi' as ffi;
+import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:ffi/ffi.dart' as ffi_pkg;
 import 'package:flutter/gestures.dart';
@@ -27,8 +28,10 @@ class PdfReaderState {
   final bool isPageIndicatorVisible;
   final int displayedPage;
   final Map<int, ui.Image> pageImages;
+  final Map<int, ui.Image> highResPageImages;
   final double viewportWidth;
   final bool isHorizontalMode;
+  final double originalMaxWidth;
 
   const PdfReaderState({
     this.filePath,
@@ -44,8 +47,10 @@ class PdfReaderState {
     this.isPageIndicatorVisible = true,
     this.displayedPage = 1,
     this.pageImages = const {},
+    this.highResPageImages = const {},
     this.viewportWidth = 0.0,
     this.isHorizontalMode = false,
+    this.originalMaxWidth = 0.0,
   });
 
   PdfReaderState copyWith({
@@ -62,10 +67,12 @@ class PdfReaderState {
     bool? isPageIndicatorVisible,
     int? displayedPage,
     Map<int, ui.Image>? pageImages,
+    Map<int, ui.Image>? highResPageImages,
     double? viewportWidth,
     bool? isHorizontalMode,
     bool clearFilePath = false,
     bool clearErrorMessage = false,
+    double? originalMaxWidth,
   }) {
     return PdfReaderState(
       filePath: clearFilePath ? null : (filePath ?? this.filePath),
@@ -85,8 +92,10 @@ class PdfReaderState {
           isPageIndicatorVisible ?? this.isPageIndicatorVisible,
       displayedPage: displayedPage ?? this.displayedPage,
       pageImages: pageImages ?? this.pageImages,
+      highResPageImages: highResPageImages ?? this.highResPageImages,
       viewportWidth: viewportWidth ?? this.viewportWidth,
       isHorizontalMode: isHorizontalMode ?? this.isHorizontalMode,
+      originalMaxWidth: originalMaxWidth ?? this.originalMaxWidth,
     );
   }
 }
@@ -105,8 +114,14 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   Timer? _hideIndicatorTimer;
 
+  final Set<int> _renderingHighResPages = <int>{};
+
   static const double _separatorHeight = 10.0;
+  static const double _highResScaleFactor = 5.0;
   static const double _verticalPadding = 5.0;
+
+  /// 高清晰度渲染窗口半径：当前页前后各几页
+  static const int _highResWindowRadius = 5;
 
   final GlobalKey listViewKey = GlobalKey();
 
@@ -134,11 +149,12 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     double totalHeight = _verticalPadding;
     double detectionLineHeight = totalHeight;
     final residualRatio = 1 - ratio;
+    final scale = state.globalScale;
     for (int i = 0; i < state.totalPages; i++) {
-      totalHeight += pageHeights[i] ?? 0.0;
-      
-      detectionLineHeight =
-          totalHeight - (residualRatio) * (pageHeights[i] ?? 0.0);
+      final scaledHeight = (pageHeights[i] ?? 0.0) * scale;
+      totalHeight += scaledHeight;
+
+      detectionLineHeight = totalHeight - residualRatio * scaledHeight;
       result.add(detectionLineHeight);
 
       totalHeight += _separatorHeight;
@@ -206,7 +222,10 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     }
   }
 
-  void onScrollChanged(ScrollController scrollController) {
+  Future<void> onScrollChanged(
+    ScrollController scrollController,
+    double devicePixelRatio,
+  ) async {
     if (state.totalPages == 0 || !scrollController.hasClients) return;
     if (_detectionLineHeights.isEmpty) return;
 
@@ -226,6 +245,65 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     if (newPage != state.currentPage) {
       state = state.copyWith(currentPage: newPage);
       showPageIndicator();
+      await _updateHighResCache(devicePixelRatio);
+    }
+  }
+
+  Future<void> _updateHighResCache(double devicePixelRatio) async {
+    if (state.totalPages == 0) return;
+
+    final int start = (state.currentPage - _highResWindowRadius).clamp(
+      0,
+      state.totalPages - 1,
+    );
+    final int end = (state.currentPage + _highResWindowRadius).clamp(
+      0,
+      state.totalPages - 1,
+    );
+    final targetPages = {for (int i = start; i <= end; i++) i};
+
+    // Remove pages outside the window
+    final toRemove = state.highResPageImages.keys
+        .where((k) => !targetPages.contains(k))
+        .toList();
+
+    if (toRemove.isNotEmpty) {
+      final newHighRes = Map<int, ui.Image>.of(state.highResPageImages);
+      for (final idx in toRemove) {
+        newHighRes[idx]?.dispose();
+        newHighRes.remove(idx);
+      }
+      state = state.copyWith(highResPageImages: newHighRes);
+    }
+
+    // Add pages inside the window that are not yet cached or rendering
+    final toAdd = targetPages.where(
+      (p) =>
+          !state.highResPageImages.containsKey(p) &&
+          !_renderingHighResPages.contains(p),
+    );
+
+    for (final pageIndex in toAdd) {
+      _renderingHighResPages.add(pageIndex);
+      final renderScale = _highResScaleFactor * devicePixelRatio;
+      _renderPage(pageIndex, scale: renderScale).then((result) {
+        if (result != null && result['success']) {
+          ui.decodeImageFromPixels(
+            result['data'],
+            result['width'],
+            result['height'],
+            ui.PixelFormat.rgba8888,
+            (img) {
+              _renderingHighResPages.remove(pageIndex);
+              final newHighRes = Map<int, ui.Image>.of(state.highResPageImages);
+              newHighRes[pageIndex] = img;
+              state = state.copyWith(highResPageImages: newHighRes);
+            },
+          );
+        } else {
+          _renderingHighResPages.remove(pageIndex);
+        }
+      });
     }
   }
 
@@ -240,9 +318,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       final double scaleChange = scrollDelta < 0 ? 0.2 : -0.2;
       final double targetScale = (state.globalScale + scaleChange).clamp(
         0.5,
-        5.0,
+        6.0,
       );
-
       if (scrollController.hasClients) {
         _oldScale = state.globalScale;
         _scrollOffset = scrollController.offset;
@@ -261,6 +338,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   void onScaleChanged(double newScale, ScrollController scrollController) {
     state = state.copyWith(globalScale: newScale);
     restoreScrollAfterScale(scrollController);
+    onPageSizeMeasured();
   }
 
   void onCtrlPressed(bool isCtrlPressed) {
@@ -269,18 +347,13 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     }
   }
 
-  // TODO: Re-calculate page heights and detection line heights when scale changes
-  // void onPageSizeMeasured(int pageIndex, double height) {
-  //   if (state.pageHeights[pageIndex] != height) {
-  //     final newPageHeights = Map<int, double>.from(state.pageHeights);
-  //     newPageHeights[pageIndex] = height;
-  //     state = state.copyWith(pageHeights: newPageHeights);
-  //     calculateDetectionLineHeights(0.75, newPageHeights);
-  //   }
-  // }
+  void onPageSizeMeasured() {
+    calculateDetectionLineHeights(0.75, state.pageHeights);
+  }
 
-  void onViewportWidthChanged(double viewportWidth) {
-    bool shouldBeHorizontal = false;
+  void onViewportWidthChanged(double viewportWidth, double screenWidth) {
+    final shouldBeHorizontal = viewportWidth >= screenWidth;
+    // print('screenWidth: $screenWidth, viewportWidth: $viewportWidth, shouldBeHorizontal: $shouldBeHorizontal');
     state = state.copyWith(
       viewportWidth: viewportWidth,
       isHorizontalMode: shouldBeHorizontal,
@@ -369,13 +442,19 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         final pageOriginalSizes =
             initResult['pageOriginalSizes'] as Map<int, List<double>>? ?? {};
 
+        final double originalMaxWidth =
+            initResult['originalMaxWidth'] as double? ?? 0.0;
+
         final Map<String, Map<int, List<double>>> pageOriginalSizesCache = {
           fileHash: pageOriginalSizes,
         };
 
         final pageHeights = Map.of(state.pageHeights);
+
         for (int i = 0; i < initResult['pageCount']; i++) {
           pageHeights[i] = (pageOriginalSizes[i]?[1] ?? 0.0) / devicePixelRatio;
+          //   originalMaxWidth =
+          //       max(originalMaxWidth, pageOriginalSizes[i]?[0] ?? 0.0);
         }
         state = state.copyWith(
           filePath: path,
@@ -384,6 +463,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           pdfSendPort: _pdfSendPort,
           pageOriginalSizesCache: pageOriginalSizesCache,
           pageHeights: pageHeights,
+          originalMaxWidth: originalMaxWidth,
         );
         calculateDetectionLineHeights(0.75, pageHeights);
       } else {
@@ -427,7 +507,11 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     for (final image in state.pageImages.values) {
       image.dispose();
     }
-    state = state.copyWith(pageImages: {});
+    for (final image in state.highResPageImages.values) {
+      image.dispose();
+    }
+    _renderingHighResPages.clear();
+    state = state.copyWith(pageImages: {}, highResPageImages: {});
   }
 
   Future<Map<String, dynamic>?> _renderPage(
@@ -462,6 +546,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
       if (type == 'init') {
         final Uint8List bytes = message['pdfBytes'];
+        double originalMaxWidth = 0.0;
         if (doc != null) pdfiumBindings.FPDF_CloseDocument(doc!);
         if (fileBuffer != null) ffi_pkg.calloc.free(fileBuffer!);
 
@@ -484,12 +569,18 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
               pdfiumBindings.FPDF_GetPageWidthF(page),
               pdfiumBindings.FPDF_GetPageHeightF(page),
             ];
+
+            originalMaxWidth = max(
+              originalMaxWidth,
+              pageOriginalSizes![i]?[0] ?? 0.0,
+            );
             pdfiumBindings.FPDF_ClosePage(page);
           }
           replyPort.send({
             'success': true,
             'pageCount': pageCount,
             'pageOriginalSizes': pageOriginalSizes,
+            'originalMaxWidth': originalMaxWidth,
           });
         }
       } else if (type == 'render') {
@@ -523,7 +614,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           width,
           height,
           0,
-          0x02 | 0x01 | 0x04,
+          FPDF_ANNOT | FPDF_LCD_TEXT,
         );
 
         final buffer = pdfiumBindings.FPDFBitmap_GetBuffer(bitmap);

@@ -5,11 +5,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'providers/pdf_reader_provider.dart';
 
 void main() {
-  runApp(
-    ProviderScope(
-      child: PdfReaderApp(),
-    ),
-  );
+  runApp(ProviderScope(child: PdfReaderApp()));
 }
 
 class PdfReaderApp extends StatelessWidget {
@@ -46,8 +42,11 @@ class PdfReaderPage extends HookConsumerWidget {
     final listViewKey = useMemoized(() => notifier.listViewKey, []);
 
     useEffect(() {
-      void listener() {
-        notifier.onScrollChanged(scrollController);
+      void listener() async {
+        await notifier.onScrollChanged(
+          scrollController,
+          View.of(context).devicePixelRatio,
+        );
       }
 
       scrollController.addListener(listener);
@@ -56,19 +55,25 @@ class PdfReaderPage extends HookConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          state.filePath?.split('\\').last ?? 'PDF Studio',
-        ),
+        title: Text(state.filePath?.split('\\').last ?? 'PDF Studio'),
         actions: [
           IconButton(
             icon: const Icon(Icons.folder_open),
-            onPressed: () => notifier.pickPdf(View.of(context).devicePixelRatio),
+            onPressed: () =>
+                notifier.pickPdf(View.of(context).devicePixelRatio),
           ),
         ],
       ),
       body: Stack(
         children: [
-          _buildBody(context, ref, notifier, scrollController, listViewKey, state),
+          _buildBody(
+            context,
+            ref,
+            notifier,
+            scrollController,
+            listViewKey,
+            state,
+          ),
           if (state.totalPages > 0)
             Positioned(
               right: 16,
@@ -104,23 +109,31 @@ class PdfReaderPage extends HookConsumerWidget {
       return const Center(child: Text("请打开 PDF 文件"));
     }
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        if (constraints.maxWidth > 0 &&
-            constraints.maxWidth != state.viewportWidth) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            notifier.onViewportWidthChanged(constraints.maxWidth);
-          });
-        }
+    final screenWidth = MediaQuery.of(context).size.width;
+    final currentWidth = state.originalMaxWidth * state.globalScale / View.of(context).devicePixelRatio;
 
-        return Listener(
-          onPointerSignal: (event) =>
-              notifier.handlePointerSignal(event, scrollController),
-          child: state.isHorizontalMode
-              ? _buildHorizontalMode(notifier, state, scrollController, listViewKey)
-              : _buildVerticalMode(notifier, state, scrollController, listViewKey),
-        );
-      },
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (currentWidth != state.viewportWidth) {
+        notifier.onViewportWidthChanged(currentWidth, screenWidth);
+      }
+    });
+
+    return Listener(
+      onPointerSignal: (event) =>
+          notifier.handlePointerSignal(event, scrollController),
+      child: state.isHorizontalMode
+          ? _buildHorizontalMode(
+              notifier,
+              state,
+              scrollController,
+              listViewKey,
+            )
+          : _buildVerticalMode(
+              notifier,
+              state,
+              scrollController,
+              listViewKey,
+            ),
     );
   }
 
@@ -208,32 +221,29 @@ class PdfPageWidget extends HookConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(pdfReaderProvider);
-    // final notifier = ref.read(pdfReaderProvider.notifier);
     final devicePixelRatio = View.of(context).devicePixelRatio;
 
-    final pageSizes = state.pageOriginalSizesCache[state.fileHash]?[pageIndex];
+    final pageSizes = ref.watch(
+      pdfReaderProvider.select(
+        (state) => state.pageOriginalSizesCache[state.fileHash]?[pageIndex],
+      ),
+    );
     final originalWidth = pageSizes?[0] ?? 0.0;
     final originalHeight = pageSizes?[1] ?? 0.0;
 
-    // useEffect(() {
-    //   if (originalHeight > 0) {
-    //     WidgetsBinding.instance.addPostFrameCallback((_) {
-    //       notifier.onPageSizeMeasured(
-    //         pageIndex,
-    //         originalHeight / devicePixelRatio * scale,
-    //       );
-    //     });
-    //   }
-    //   return null;
-    // }, [originalHeight, scale, devicePixelRatio]);
+    final pageImage = ref.watch(
+      pdfReaderProvider.select(
+        (state) =>
+            state.highResPageImages[pageIndex] ?? state.pageImages[pageIndex],
+      ),
+    );
 
     return _buildPageContent(
       originalWidth,
       originalHeight,
       scale,
       devicePixelRatio,
-      state.pageImages[pageIndex],
+      pageImage,
     );
   }
 
@@ -269,7 +279,7 @@ class PdfPageWidget extends HookConsumerWidget {
                 image: pageImage,
                 fit: BoxFit.contain,
                 filterQuality: FilterQuality.medium,
-                isAntiAlias: true,
+                // isAntiAlias: true,
               ),
       ),
     );
