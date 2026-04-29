@@ -129,6 +129,10 @@ class PdfReaderPage extends HookConsumerWidget {
       pdfReaderProvider.select((state) => state.fileHash),
     );
 
+    final pageHeights = ref.watch(
+      pdfReaderProvider.select((state) => state.pageHeights),
+    );
+
     if (errorMessage != null) {
       return Center(
         child: Text(errorMessage, style: const TextStyle(color: Colors.red)),
@@ -183,6 +187,8 @@ class PdfReaderPage extends HookConsumerWidget {
               fileHash,
               scrollController,
               listViewKey,
+              pageHeights,
+              globalScale,
             ),
     );
   }
@@ -238,29 +244,41 @@ class PdfReaderPage extends HookConsumerWidget {
     String? fileHash,
     ScrollController scrollController,
     GlobalKey listViewKey,
+    Map<int, double>? pageHeights,
+    double globalScale,
   ) {
+
     return Container(
       color: Colors.grey[200],
       child: SizedBox(
         width: MediaQuery.of(context).size.width,
-        child: SingleChildScrollView(
+        child: ListView.builder(
+          itemCount: totalPages * 2,
+          itemExtentBuilder: (index, dimensions) {
+            if (pageHeights != null) {
+              if (index.isEven) {
+                return pageHeights[index / 2]! * globalScale;
+              } else {
+                return 10; // separator height
+              }
+            }
+          },
           key: listViewKey,
           controller: scrollController,
           physics: isCtrlPressed
               ? const NeverScrollableScrollPhysics()
               : const ClampingScrollPhysics(),
           padding: const EdgeInsets.symmetric(vertical: 5),
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (int i = 0; i < totalPages; i++) ...[
-                  PdfPageWidget(key: ValueKey('page_$i'), pageIndex: i),
-                  if (i < totalPages - 1) const SizedBox(height: 10),
-                ],
-              ],
-            ),
-          ),
+          itemBuilder: (context, index) {
+            if (index.isOdd) {
+              return const SizedBox(height: 10);
+            } else {
+              // print(index);
+              final i = index ~/ 2;
+
+              return PdfPageWidget(key: ValueKey('page_$i'), pageIndex: i);
+            }
+          },
         ),
       ),
     );

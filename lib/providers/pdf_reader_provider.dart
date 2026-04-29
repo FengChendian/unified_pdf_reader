@@ -22,6 +22,7 @@ class PdfReaderState {
   final double globalScale;
   final bool isCtrlPressed;
   final Map<int, double> pageHeights;
+  final Map<int, double> accumulatedPageHeights;
   final Map<String, Map<int, List<int>>> pageOriginalSizesCache;
   final SendPort? pdfSendPort;
   final bool isPageIndicatorVisible;
@@ -42,6 +43,7 @@ class PdfReaderState {
     this.globalScale = 1.0,
     this.isCtrlPressed = false,
     this.pageHeights = const {},
+    this.accumulatedPageHeights = const {},
     this.pageOriginalSizesCache = const {},
     this.pdfSendPort,
     this.isPageIndicatorVisible = true,
@@ -63,6 +65,7 @@ class PdfReaderState {
     double? globalScale,
     bool? isCtrlPressed,
     Map<int, double>? pageHeights,
+    Map<int, double>? accumulatedPageHeights,
     Map<String, Map<int, List<int>>>? pageOriginalSizesCache,
     SendPort? pdfSendPort,
     bool? isPageIndicatorVisible,
@@ -87,6 +90,8 @@ class PdfReaderState {
       globalScale: globalScale ?? this.globalScale,
       isCtrlPressed: isCtrlPressed ?? this.isCtrlPressed,
       pageHeights: pageHeights ?? this.pageHeights,
+      accumulatedPageHeights:
+          accumulatedPageHeights ?? this.accumulatedPageHeights,
       pageOriginalSizesCache:
           pageOriginalSizesCache ?? this.pageOriginalSizesCache,
       pdfSendPort: pdfSendPort ?? this.pdfSendPort,
@@ -151,10 +156,13 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     // Map<int, double> pageHeights,
   ) {
     final result = <double>[];
+    final accumulatedHeights = Map.of(state.accumulatedPageHeights);
+
     double totalHeight = _verticalPadding;
     double detectionLineHeight = totalHeight;
     final residualRatio = 1 - ratio;
     final scale = state.globalScale;
+
     for (int i = 0; i < state.totalPages; i++) {
       final scaledHeight = (state.pageHeights[i] ?? 0.0) * scale;
       totalHeight += scaledHeight;
@@ -163,9 +171,12 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       result.add(detectionLineHeight);
 
       totalHeight += _separatorHeight;
+      accumulatedHeights[i] = totalHeight;
     }
 
     _detectionLineHeights = result;
+
+    // state = state.copyWith(accumulatedPageHeights: accumulatedHeights);
   }
 
   bool _handleKeyEvent(KeyEvent event) {
