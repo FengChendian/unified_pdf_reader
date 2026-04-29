@@ -44,6 +44,7 @@ class PdfReaderPage extends HookConsumerWidget {
     }, [notifier]);
 
     final scrollController = useScrollController();
+    final horizontalScrollController = useScrollController();
     final listViewKey = useMemoized(() => notifier.listViewKey, []);
 
     useEffect(() {
@@ -76,10 +77,12 @@ class PdfReaderPage extends HookConsumerWidget {
             ref,
             notifier,
             scrollController,
+            horizontalScrollController,
             listViewKey,
             // state,
           ),
-          if (filePath != null) Positioned(right: 16, bottom: 16, child: PageIndicator()),
+          if (filePath != null)
+            Positioned(right: 16, bottom: 16, child: PageIndicator()),
         ],
       ),
     );
@@ -90,6 +93,7 @@ class PdfReaderPage extends HookConsumerWidget {
     WidgetRef ref,
     PdfReaderNotifier notifier,
     ScrollController scrollController,
+    ScrollController horizontalScrollController,
     GlobalKey listViewKey,
   ) {
     final errorMessage = ref.watch(
@@ -156,8 +160,11 @@ class PdfReaderPage extends HookConsumerWidget {
     }
 
     return Listener(
-      onPointerSignal: (event) =>
-          notifier.handlePointerSignal(event, scrollController),
+      onPointerSignal: (event) => notifier.handlePointerSignal(
+        event,
+        scrollController,
+        horizontalScrollController: horizontalScrollController,
+      ),
       child: isHorizontalMode
           ? _buildHorizontalMode(
               notifier,
@@ -165,9 +172,11 @@ class PdfReaderPage extends HookConsumerWidget {
               totalPages,
               fileHash,
               scrollController,
+              horizontalScrollController,
               listViewKey,
             )
           : _buildVerticalMode(
+              context,
               notifier,
               isCtrlPressed,
               totalPages,
@@ -185,10 +194,12 @@ class PdfReaderPage extends HookConsumerWidget {
     int totalPages,
     String? fileHash,
     ScrollController scrollController,
+    ScrollController horizontalScrollController,
     GlobalKey listViewKey,
   ) {
     return ListView(
       scrollDirection: Axis.horizontal,
+      controller: horizontalScrollController,
       children: [
         Container(
           color: Colors.grey[200],
@@ -220,6 +231,7 @@ class PdfReaderPage extends HookConsumerWidget {
   }
 
   Widget _buildVerticalMode(
+    BuildContext context,
     PdfReaderNotifier notifier,
     bool isCtrlPressed,
     int totalPages,
@@ -229,7 +241,8 @@ class PdfReaderPage extends HookConsumerWidget {
   ) {
     return Container(
       color: Colors.grey[200],
-      child: Center(
+      child: SizedBox(
+        width: MediaQuery.of(context).size.width,
         child: SingleChildScrollView(
           key: listViewKey,
           controller: scrollController,
@@ -237,16 +250,16 @@ class PdfReaderPage extends HookConsumerWidget {
               ? const NeverScrollableScrollPhysics()
               : const ClampingScrollPhysics(),
           padding: const EdgeInsets.symmetric(vertical: 5),
-          child: Column(
-            children: [
-              for (int i = 0; i < totalPages; i++) ...[
-                PdfPageWidget(
-                  key: ValueKey('page_$i'),
-                  pageIndex: i,
-                ),
-                if (i < totalPages - 1) const SizedBox(height: 10),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (int i = 0; i < totalPages; i++) ...[
+                  PdfPageWidget(key: ValueKey('page_$i'), pageIndex: i),
+                  if (i < totalPages - 1) const SizedBox(height: 10),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -268,8 +281,8 @@ class PdfPageWidget extends HookConsumerWidget {
         (state) => state.pageOriginalSizesCache[state.fileHash]?[pageIndex],
       ),
     );
-    final originalWidth = pageSizes?[0] ?? 0.0;
-    final originalHeight = pageSizes?[1] ?? 0.0;
+    final originalWidth = pageSizes?[0] ?? 0;
+    final originalHeight = pageSizes?[1] ?? 0;
 
     final pageImage = ref.watch(
       pdfReaderProvider.select(
@@ -294,8 +307,8 @@ class PdfPageWidget extends HookConsumerWidget {
   }
 
   Widget _buildPageContent(
-    double originalWidth,
-    double originalHeight,
+    int originalWidth,
+    int originalHeight,
     double scale,
     double devicePixelRatio,
     ui.Image? pageImage,
