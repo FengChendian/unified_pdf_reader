@@ -9,7 +9,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:crypto/crypto.dart';
-// import 'package:pdfium_flutter/pdfium_flutter.dart';
 import 'package:unified_pdf_reader/mupdf/mupdf.dart';
 
 /// PDF 阅读器状态
@@ -21,9 +20,9 @@ class PdfReaderState {
   final String? errorMessage;
   final double globalScale;
   final bool isCtrlPressed;
-  final Map<int, double> pageHeights;
-  final Map<int, double> accumulatedPageHeights;
-  final Map<String, Map<int, List<int>>> pageOriginalSizesCache;
+  final Map<int, double> pageOriginalHeights;
+  // final Map<int, double> accumulatedPageHeights;
+  final Map<String, Map<int, List<int>>> docRawPageSizes;
   final SendPort? pdfSendPort;
   final bool isPageIndicatorVisible;
   final int displayedPage;
@@ -42,9 +41,9 @@ class PdfReaderState {
     this.errorMessage,
     this.globalScale = 1.0,
     this.isCtrlPressed = false,
-    this.pageHeights = const {},
-    this.accumulatedPageHeights = const {},
-    this.pageOriginalSizesCache = const {},
+    this.pageOriginalHeights = const {},
+    // this.accumulatedPageHeights = const {},
+    this.docRawPageSizes = const {},
     this.pdfSendPort,
     this.isPageIndicatorVisible = true,
     this.displayedPage = 1,
@@ -64,9 +63,9 @@ class PdfReaderState {
     String? errorMessage,
     double? globalScale,
     bool? isCtrlPressed,
-    Map<int, double>? pageHeights,
-    Map<int, double>? accumulatedPageHeights,
-    Map<String, Map<int, List<int>>>? pageOriginalSizesCache,
+    Map<int, double>? pageOriginalHeights,
+    // Map<int, double>? accumulatedPageHeights,
+    Map<String, Map<int, List<int>>>? docRawPageSizes,
     SendPort? pdfSendPort,
     bool? isPageIndicatorVisible,
     int? displayedPage,
@@ -89,11 +88,9 @@ class PdfReaderState {
           : (errorMessage ?? this.errorMessage),
       globalScale: globalScale ?? this.globalScale,
       isCtrlPressed: isCtrlPressed ?? this.isCtrlPressed,
-      pageHeights: pageHeights ?? this.pageHeights,
-      accumulatedPageHeights:
-          accumulatedPageHeights ?? this.accumulatedPageHeights,
-      pageOriginalSizesCache:
-          pageOriginalSizesCache ?? this.pageOriginalSizesCache,
+      pageOriginalHeights: pageOriginalHeights ?? this.pageOriginalHeights,
+      docRawPageSizes:
+          docRawPageSizes ?? this.docRawPageSizes,
       pdfSendPort: pdfSendPort ?? this.pdfSendPort,
       isPageIndicatorVisible:
           isPageIndicatorVisible ?? this.isPageIndicatorVisible,
@@ -123,11 +120,12 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   List<double> _detectionLineHeights = [];
 
   Timer? _hideIndicatorTimer;
+  Timer? _highResDebounceTimer;
 
   final Set<int> _renderingHighResPages = <int>{};
 
   static const double _separatorHeight = 10.0;
-  static const double _highResScaleFactor = 4.0;
+  static const double _highResScaleFactor = 5.0;
   static const double _verticalPadding = 5.0;
 
   /// 高清晰度渲染窗口半径：当前页前后各几页
@@ -143,6 +141,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _hideIndicatorTimer?.cancel();
+    _highResDebounceTimer?.cancel();
     _closePdf();
   }
 
@@ -156,7 +155,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     // Map<int, double> pageHeights,
   ) {
     final result = <double>[];
-    final accumulatedHeights = Map.of(state.accumulatedPageHeights);
+    // final accumulatedHeights = Map.of(state.accumulatedPageHeights);
 
     double totalHeight = _verticalPadding;
     double detectionLineHeight = totalHeight;
@@ -164,14 +163,14 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     final scale = state.globalScale;
 
     for (int i = 0; i < state.totalPages; i++) {
-      final scaledHeight = (state.pageHeights[i] ?? 0.0) * scale;
+      final scaledHeight = (state.pageOriginalHeights[i] ?? 0.0) * scale;
       totalHeight += scaledHeight;
 
       detectionLineHeight = totalHeight - residualRatio * scaledHeight;
       result.add(detectionLineHeight);
 
       totalHeight += _separatorHeight;
-      accumulatedHeights[i] = totalHeight;
+      // accumulatedHeights[i] = totalHeight;
     }
 
     _detectionLineHeights = result;
@@ -270,7 +269,10 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     if (newPage != state.currentPage) {
       state = state.copyWith(currentPage: newPage);
       showPageIndicator();
-      await _updateHighResCache(devicePixelRatio);
+      _highResDebounceTimer?.cancel();
+      _highResDebounceTimer = Timer(const Duration(milliseconds: 100), () {
+        _updateHighResCache(devicePixelRatio);
+      });
     }
   }
 
@@ -309,13 +311,18 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         .where((k) => !targetPages.contains(k))
         .toList();
 
-
     // Add pages inside the window that are not yet cached or rendering
-    final toAdd = targetPages.where(
-      (p) =>
-          !state.highResPageImages.containsKey(p) &&
-          !_renderingHighResPages.contains(p),
-    );
+    // Sort by distance from current page so nearby pages render first
+    final toAdd = targetPages
+        .where(
+          (p) =>
+              !state.highResPageImages.containsKey(p) &&
+              !_renderingHighResPages.contains(p),
+        )
+        .toList()
+      ..sort((a, b) => (a - state.currentPage).abs().compareTo(
+            (b - state.currentPage).abs(),
+          ));
     // print(toAdd);
     for (final pageIndex in toAdd) {
       _renderingHighResPages.add(pageIndex);
@@ -365,7 +372,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       final double scaleChange = scrollDelta < 0 ? 0.2 : -0.2;
       final double targetScale = (state.globalScale + scaleChange).clamp(
         0.5,
-        6.0,
+        8.0,
       );
       if (scrollController.hasClients) {
         _oldScale = state.globalScale;
@@ -519,6 +526,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         _pdfReceivePort!.sendPort,
       );
 
+      state = state.copyWith(isLoading: true);
+
       final List<dynamic> initData = await _pdfReceivePort!.first;
       _pdfSendPort = initData[0] as SendPort;
 
@@ -535,15 +544,13 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       final initResult = await responsePort.first;
       responsePort.close();
 
-      state = state.copyWith(isLoading: true);
-
       if (initResult['success']) {
         final pageOriginalSizes =
             initResult['pageOriginalSizes'] as Map<int, List<int>>? ?? {};
 
         final int originalMaxWidth = initResult['originalMaxWidth'] ?? 0;
 
-        final Map<String, Map<int, List<int>>> pageOriginalSizesCache = {
+        final Map<String, Map<int, List<int>>> pageRawSizesCache = {
           fileHash: pageOriginalSizes,
         };
 
@@ -567,7 +574,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
             }
           }
         }
-        final pageHeights = Map.of(state.pageHeights);
+        final pageHeights = Map.of(state.pageOriginalHeights);
 
         for (int i = 0; i < initResult['pageCount']; i++) {
           pageHeights[i] =
@@ -582,8 +589,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           fileHash: fileHash,
           totalPages: initResult['pageCount'],
           pdfSendPort: _pdfSendPort,
-          pageOriginalSizesCache: pageOriginalSizesCache,
-          pageHeights: pageHeights,
+          docRawPageSizes: pageRawSizesCache,
+          pageOriginalHeights: pageHeights,
           pageImages: pageImages,
           originalMaxWidth: originalMaxWidth,
           isLoading: false,
@@ -592,7 +599,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         calculateDetectionLineHeights(0.75);
 
         // print('PDF 初始化成功，页数：${state.totalPages}，原始最大宽度：${state.originalMaxWidth}');
-        // await _updateHighResCache(devicePixelRatio);
+        await _updateHighResCache(devicePixelRatio);
         // print('PDF 初始化成功，页数：${state.totalPages}，原始最大宽度：${state.originalMaxWidth}');
         // print(" PDF 页面渲染完成");
       } else {
@@ -676,10 +683,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     final doc = PdfDocument();
 
     childReceivePort.listen((message) {
-      
       final String type = message['type'];
       final SendPort replyPort = message['replyPort'];
-      
 
       if (type == 'init') {
         final Map<int, Uint8List> renderedPixedMap = {};
@@ -717,12 +722,10 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           'renderedPixedMap': renderedPixedMap,
         });
       } else if (type == 'render') {
-
         if (pageOriginalSizes == null) return;
 
         final int index = message['pageIndex'];
         final double scale = (message['scale'] ?? 1.0);
-
 
         final bitmap = doc.renderPage(
           pageNumber: index,
@@ -741,8 +744,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         //       ((u32 & 0x00FF0000) >> 16) |
         //       ((u32 & 0x000000FF) << 16);
         // }
-
-       
 
         replyPort.send({
           'success': true,

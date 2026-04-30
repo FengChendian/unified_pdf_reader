@@ -99,6 +99,9 @@ class PdfReaderPage extends HookConsumerWidget {
     final errorMessage = ref.watch(
       pdfReaderProvider.select((state) => state.errorMessage),
     );
+    final isLoading = ref.watch(
+      pdfReaderProvider.select((state) => state.isLoading),
+    );
     final pdfSendPort = ref.watch(
       pdfReaderProvider.select((state) => state.pdfSendPort),
     );
@@ -130,7 +133,7 @@ class PdfReaderPage extends HookConsumerWidget {
     );
 
     final pageHeights = ref.watch(
-      pdfReaderProvider.select((state) => state.pageHeights),
+      pdfReaderProvider.select((state) => state.pageOriginalHeights),
     );
 
     if (errorMessage != null) {
@@ -138,30 +141,25 @@ class PdfReaderPage extends HookConsumerWidget {
         child: Text(errorMessage, style: const TextStyle(color: Colors.red)),
       );
     }
+    if (isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
     if (pdfSendPort == null) {
       return const Center(child: Text("请打开 PDF 文件"));
     }
 
     final screenWidth = MediaQuery.of(context).size.width;
-    final currentWidth =
+    final currentMaxWidth =
         originalMaxWidth * globalScale / View.of(context).devicePixelRatio;
 
-    final isLoading = ref.watch(
-      pdfReaderProvider.select((state) => state.isLoading),
-    );
-
     useEffect(() {
-      if (currentWidth != viewportWidth) {
+      if (currentMaxWidth != viewportWidth) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          notifier.onViewportWidthChanged(currentWidth, screenWidth);
+          notifier.onViewportWidthChanged(currentMaxWidth, screenWidth);
         });
       }
       return null;
-    }, [currentWidth, viewportWidth]);
-
-    if (isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    }, [currentMaxWidth, viewportWidth]);
 
     return Listener(
       onPointerSignal: (event) => notifier.handlePointerSignal(
@@ -171,6 +169,7 @@ class PdfReaderPage extends HookConsumerWidget {
       ),
       child: isHorizontalMode
           ? _buildHorizontalMode(
+              context,
               notifier,
               isCtrlPressed,
               totalPages,
@@ -178,6 +177,9 @@ class PdfReaderPage extends HookConsumerWidget {
               scrollController,
               horizontalScrollController,
               listViewKey,
+              pageHeights,
+              currentMaxWidth,
+              globalScale,
             )
           : _buildVerticalMode(
               context,
@@ -194,6 +196,7 @@ class PdfReaderPage extends HookConsumerWidget {
   }
 
   Widget _buildHorizontalMode(
+    BuildContext context,
     PdfReaderNotifier notifier,
     // PdfReaderState state,
     bool isCtrlPressed,
@@ -202,32 +205,50 @@ class PdfReaderPage extends HookConsumerWidget {
     ScrollController scrollController,
     ScrollController horizontalScrollController,
     GlobalKey listViewKey,
+    Map<int, double>? pageHeights,
+    double currentMaxWidth,
+    double globalScale,
   ) {
     return ListView(
       scrollDirection: Axis.horizontal,
       controller: horizontalScrollController,
       children: [
-        Container(
-          color: Colors.grey[200],
-          child: Center(
-            child: SingleChildScrollView(
-              key: listViewKey,
-              controller: scrollController,
-              physics: isCtrlPressed
-                  ? const NeverScrollableScrollPhysics()
-                  : const ClampingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(vertical: 5),
-              child: Column(
-                children: [
-                  for (int i = 0; i < totalPages; i++) ...[
-                    PdfPageWidget(
-                      key: ValueKey('${fileHash}_page_$i'),
+        SizedBox(
+          width: currentMaxWidth,
+          child: ColoredBox(
+            color: Colors.grey[200]!,
+            child: Center(
+              child: ListView.builder(
+                itemCount: totalPages * 2,
+                itemExtentBuilder: (index, dimensions) {
+                  if (pageHeights != null) {
+                    if (index.isEven) {
+                      return pageHeights[index ~/ 2]! * globalScale;
+                    } else {
+                      return 10; // separator height
+                    }
+                  }
+                  return null;
+                },
+                key: listViewKey,
+                controller: scrollController,
+                physics: isCtrlPressed
+                    ? const NeverScrollableScrollPhysics()
+                    : const ClampingScrollPhysics(),
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                itemBuilder: (context, index) {
+                  if (index.isOdd) {
+                    return const SizedBox(height: 10);
+                  } else {
+                    // print(index);
+                    final i = index ~/ 2;
+
+                    return PdfPageWidget(
+                      key: ValueKey('page_$i'),
                       pageIndex: i,
-                      // scale: state.globalScale,
-                    ),
-                    if (i < totalPages - 1) const SizedBox(height: 10),
-                  ],
-                ],
+                    );
+                  }
+                },
               ),
             ),
           ),
@@ -247,7 +268,6 @@ class PdfReaderPage extends HookConsumerWidget {
     Map<int, double>? pageHeights,
     double globalScale,
   ) {
-
     return Container(
       color: Colors.grey[200],
       child: SizedBox(
@@ -257,11 +277,12 @@ class PdfReaderPage extends HookConsumerWidget {
           itemExtentBuilder: (index, dimensions) {
             if (pageHeights != null) {
               if (index.isEven) {
-                return pageHeights[index / 2]! * globalScale;
+                return pageHeights[index ~/ 2]! * globalScale;
               } else {
                 return 10; // separator height
               }
             }
+            return null;
           },
           key: listViewKey,
           controller: scrollController,
@@ -296,7 +317,7 @@ class PdfPageWidget extends HookConsumerWidget {
 
     final pageSizes = ref.watch(
       pdfReaderProvider.select(
-        (state) => state.pageOriginalSizesCache[state.fileHash]?[pageIndex],
+        (state) => state.docRawPageSizes[state.fileHash]?[pageIndex],
       ),
     );
     final originalWidth = pageSizes?[0] ?? 0;
@@ -364,15 +385,8 @@ class PdfPageWidget extends HookConsumerWidget {
 }
 
 class PageIndicator extends HookConsumerWidget {
-  // final bool isVisible;
-  // final int displayedPage;
-  // final int totalPages;
-
   const PageIndicator({
     super.key,
-    // required this.isVisible,
-    // required this.displayedPage,
-    // required this.totalPages,
   });
 
   @override

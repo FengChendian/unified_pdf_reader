@@ -41,8 +41,6 @@ class PdfIsolatePool {
       _initialized ? _pageOriginalSizes : null;
   double? get originalMaxWidth => _initialized ? _originalMaxWidth : null;
 
-
-
   Future<void> initialize(Uint8List fileBytes) async {
     if (_initialized) {
       await dispose();
