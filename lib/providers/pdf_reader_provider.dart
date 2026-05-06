@@ -21,7 +21,6 @@ class PdfReaderState {
   final double globalScale;
   final bool isCtrlPressed;
   final Map<int, double> pageOriginalHeights;
-  // final Map<int, double> accumulatedPageHeights;
   final Map<String, Map<int, List<int>>> docRawPageSizes;
   final SendPort? pdfSendPort;
   final bool isPageIndicatorVisible;
@@ -29,8 +28,8 @@ class PdfReaderState {
   final Map<int, ui.Image> pageImages;
   final Map<int, ui.Image> highResPageImages;
   final double viewportWidth;
-  final bool isHorizontalMode;
-  final int originalMaxWidth;
+  // final bool isHorizontalMode;
+  final int originalPagesMaxWidth;
   final bool isLoading;
 
   const PdfReaderState({
@@ -50,8 +49,8 @@ class PdfReaderState {
     this.pageImages = const {},
     this.highResPageImages = const {},
     this.viewportWidth = 0.0,
-    this.isHorizontalMode = false,
-    this.originalMaxWidth = 0,
+    // this.isHorizontalMode = false,
+    this.originalPagesMaxWidth = 0,
     this.isLoading = false,
   });
 
@@ -64,7 +63,6 @@ class PdfReaderState {
     double? globalScale,
     bool? isCtrlPressed,
     Map<int, double>? pageOriginalHeights,
-    // Map<int, double>? accumulatedPageHeights,
     Map<String, Map<int, List<int>>>? docRawPageSizes,
     SendPort? pdfSendPort,
     bool? isPageIndicatorVisible,
@@ -72,7 +70,7 @@ class PdfReaderState {
     Map<int, ui.Image>? pageImages,
     Map<int, ui.Image>? highResPageImages,
     double? viewportWidth,
-    bool? isHorizontalMode,
+    // bool? isHorizontalMode,
     bool clearFilePath = false,
     bool clearErrorMessage = false,
     int? originalMaxWidth,
@@ -89,8 +87,7 @@ class PdfReaderState {
       globalScale: globalScale ?? this.globalScale,
       isCtrlPressed: isCtrlPressed ?? this.isCtrlPressed,
       pageOriginalHeights: pageOriginalHeights ?? this.pageOriginalHeights,
-      docRawPageSizes:
-          docRawPageSizes ?? this.docRawPageSizes,
+      docRawPageSizes: docRawPageSizes ?? this.docRawPageSizes,
       pdfSendPort: pdfSendPort ?? this.pdfSendPort,
       isPageIndicatorVisible:
           isPageIndicatorVisible ?? this.isPageIndicatorVisible,
@@ -98,8 +95,8 @@ class PdfReaderState {
       pageImages: pageImages ?? this.pageImages,
       highResPageImages: highResPageImages ?? this.highResPageImages,
       viewportWidth: viewportWidth ?? this.viewportWidth,
-      isHorizontalMode: isHorizontalMode ?? this.isHorizontalMode,
-      originalMaxWidth: originalMaxWidth ?? this.originalMaxWidth,
+      // isHorizontalMode: isHorizontalMode ?? this.isHorizontalMode,
+      originalPagesMaxWidth: originalMaxWidth ?? this.originalPagesMaxWidth,
       isLoading: isLoading ?? this.isLoading,
     );
   }
@@ -121,6 +118,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   Timer? _hideIndicatorTimer;
   Timer? _highResDebounceTimer;
+  
 
   final Set<int> _renderingHighResPages = <int>{};
 
@@ -193,55 +191,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     return false;
   }
 
-  // Future<void> renderPage(
-  //   int pageIndex,
-  //   double scale,
-  //   double devicePixelRatio,
-  // ) async {
-  //   final renderScale = scale * devicePixelRatio;
-  //   final result = await _renderPage(pageIndex, scale: renderScale);
-
-  //   if (result != null && result['success']) {
-  //     ui.decodeImageFromPixels(
-  //       result['data'],
-  //       result['width'],
-  //       result['height'],
-  //       ui.PixelFormat.rgba8888,
-  //       (img) {
-  //         final newPageImages = Map<int, ui.Image>.of(state.pageImages);
-  //         newPageImages[pageIndex] = img;
-  //         state = state.copyWith(pageImages: newPageImages);
-  //       },
-  //     );
-  //   }
-  // }
-
-  // Future<void> renderAllPages(double devicePixelRatio) async {
-  //   final newPageImages = Map<int, ui.Image>.of(state.pageImages);
-  //   if (newPageImages.isNotEmpty) {
-  //     for (final image in newPageImages.values) {
-  //       image.dispose();
-  //     }
-  //     newPageImages.clear();
-  //   }
-
-  //   for (int i = 0; i < state.totalPages; i++) {
-  //     final result = await _renderPage(i, scale: 1.0 * devicePixelRatio);
-  //     if (result != null && result['success']) {
-  //       ui.decodeImageFromPixels(
-  //         result['data'],
-  //         result['width'],
-  //         result['height'],
-  //         ui.PixelFormat.rgba8888,
-  //         (img) {
-  //           newPageImages[i] = img;
-  //         },
-  //       );
-  //     }
-  //   }
-  //   state = state.copyWith(pageImages: newPageImages, isLoading: false);
-  // }
-
   Future<void> onScrollChanged(
     ScrollController scrollController,
     double devicePixelRatio,
@@ -270,8 +219,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       state = state.copyWith(currentPage: newPage);
       showPageIndicator();
       _highResDebounceTimer?.cancel();
-      _highResDebounceTimer = Timer(const Duration(milliseconds: 100), () {
-        _updateHighResCache(devicePixelRatio);
+      _highResDebounceTimer = Timer(const Duration(milliseconds: 100), () async{
+        await _updateHighResCache(devicePixelRatio);
       });
     }
   }
@@ -313,16 +262,19 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
     // Add pages inside the window that are not yet cached or rendering
     // Sort by distance from current page so nearby pages render first
-    final toAdd = targetPages
-        .where(
-          (p) =>
-              !state.highResPageImages.containsKey(p) &&
-              !_renderingHighResPages.contains(p),
-        )
-        .toList()
-      ..sort((a, b) => (a - state.currentPage).abs().compareTo(
-            (b - state.currentPage).abs(),
-          ));
+    final toAdd =
+        targetPages
+            .where(
+              (p) =>
+                  !state.highResPageImages.containsKey(p) &&
+                  !_renderingHighResPages.contains(p),
+            )
+            .toList()
+          ..sort(
+            (a, b) => (a - state.currentPage).abs().compareTo(
+              (b - state.currentPage).abs(),
+            ),
+          );
     // print(toAdd);
     for (final pageIndex in toAdd) {
       _renderingHighResPages.add(pageIndex);
@@ -362,37 +314,57 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   void handlePointerSignal(
     PointerSignalEvent event,
-    ScrollController scrollController, {
-    ScrollController? horizontalScrollController,
-  }) {
+    ScrollController scrollController,
+    ScrollController horizontalScrollController,
+    double devicePixelRatio,
+    double screenWidth,
+    double currentPagesMaxWidth,
+  ) {
     if (event is PointerScrollEvent && state.isCtrlPressed) {
       final double scrollDelta = event.scrollDelta.dy;
       if (scrollDelta == 0) return;
 
       final double scaleChange = scrollDelta < 0 ? 0.2 : -0.2;
-      final double targetScale = (state.globalScale + scaleChange).clamp(
-        0.5,
-        8.0,
-      );
+      final double newScale = (state.globalScale + scaleChange).clamp(0.5, 8.0);
+      final newPagesMaxWidth =
+          state.originalPagesMaxWidth * newScale / devicePixelRatio;
+      double leftPadding = 0;
+
       if (scrollController.hasClients) {
         _oldScale = state.globalScale;
         _scrollOffset = scrollController.offset;
         _mouseY = event.localPosition.dy;
       }
-      if (horizontalScrollController?.hasClients ?? false) {
+
+      if (horizontalScrollController.hasClients) {
         _mouseX = event.localPosition.dx;
-        _horizontalScrollOffset = horizontalScrollController!.offset;
+        _horizontalScrollOffset = horizontalScrollController.offset;
+
+        if (currentPagesMaxWidth < screenWidth &&
+            newPagesMaxWidth >= screenWidth) {
+          leftPadding = (screenWidth - currentPagesMaxWidth) / 2;
+        } else {
+          leftPadding = 0;
+        }
       }
 
-      onScaleChanged(targetScale, scrollController, horizontalScrollController);
+      onScaleChanged(
+        newScale,
+        scrollController,
+        horizontalScrollController,
+        devicePixelRatio,
+        newPagesMaxWidth,
+        screenWidth,
+        leftPadding,
+      );
     } else {
       if (scrollController.hasClients) {
         _scrollOffset = scrollController.offset;
         _mouseY = event.localPosition.dy;
       }
-      if (horizontalScrollController?.hasClients ?? false) {
+      if (horizontalScrollController.hasClients) {
         _mouseX = event.localPosition.dx;
-        _horizontalScrollOffset = horizontalScrollController!.offset;
+        _horizontalScrollOffset = horizontalScrollController.offset;
       }
     }
   }
@@ -401,11 +373,22 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     double newScale,
     ScrollController scrollController, [
     ScrollController? horizontalScrollController,
+    double devicePixelRatio = 1.0,
+    double newPagesMaxWidth = 0,
+    double screenWidth = 0,
+    double leftPadding = 0,
   ]) {
     state = state.copyWith(globalScale: newScale);
+
     onPageSizeMeasured();
     restoreScrollAfterScale(scrollController);
-    restoreHorizontalScrollAfterScale(horizontalScrollController);
+
+    restoreHorizontalScrollAfterScale(
+      horizontalScrollController,
+      newPagesMaxWidth,
+      screenWidth,
+      leftPadding,
+    );
   }
 
   void onCtrlPressed(bool isCtrlPressed) {
@@ -416,15 +399,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   void onPageSizeMeasured() {
     calculateDetectionLineHeights(0.75);
-  }
-
-  void onViewportWidthChanged(double viewportWidth, double screenWidth) {
-    final shouldBeHorizontal = viewportWidth >= screenWidth;
-    // print('screenWidth: $screenWidth, viewportWidth: $viewportWidth, shouldBeHorizontal: $shouldBeHorizontal');
-    state = state.copyWith(
-      viewportWidth: viewportWidth,
-      isHorizontalMode: shouldBeHorizontal,
-    );
   }
 
   void restoreScrollAfterScale(ScrollController scrollController) {
@@ -460,20 +434,26 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   void restoreHorizontalScrollAfterScale(
     ScrollController? horizontalScrollController,
+    double newPagesMaxWidth,
+    double screenWidth,
+    double leftPadding,
   ) {
     if (horizontalScrollController == null ||
-        !horizontalScrollController.hasClients) {
+        !horizontalScrollController.hasClients ||
+        newPagesMaxWidth < screenWidth) {
       return;
     }
     // print("object");
+
     final double ratio = state.globalScale / _oldScale;
-    final double contentXOld = _horizontalScrollOffset + _mouseX;
+    final contentXOld = _horizontalScrollOffset + _mouseX - leftPadding;
+
     final double contentXNew = contentXOld * ratio;
     final double newOffset = contentXNew - _mouseX;
 
     final clampedOffset = newOffset.clamp(
       horizontalScrollController.position.minScrollExtent,
-      horizontalScrollController.position.maxScrollExtent,
+      newPagesMaxWidth,
     );
     // print(clampedOffset);
     horizontalScrollController.jumpTo(clampedOffset);
@@ -500,20 +480,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       state = state.copyWith(errorMessage: '选择文件失败：$e');
     }
   }
-
-  // @override
-  // set state(PdfReaderState newState) {
-  //   // TODO: implement state
-
-  //   print(
-  //     'State org:  ${state.fileHash}}',
-  //   );
-
-  //   super.state = newState;
-  //   print(
-  //     'State set: ${state.fileHash}}',
-  //   );
-  // }
 
   Future<void> _initPdfIsolate(String path, double devicePixelRatio) async {
     // state = state.copyWith(clearErrorMessage: true);
@@ -676,12 +642,9 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     final childReceivePort = ReceivePort();
     mainSendPort.send([childReceivePort.sendPort]);
 
-    // pdfiumBindings.FPDF_InitLibrary();
-    // FPDF_DOCUMENT? doc;
-
     Map<int, List<int>>? pageOriginalSizes;
     final doc = PdfDocument();
-
+    // childReceivePort.t
     childReceivePort.listen((message) {
       final String type = message['type'];
       final SendPort replyPort = message['replyPort'];
@@ -735,15 +698,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         );
 
         final rawBytes = bitmap.pixels;
-
-        // final u32list = rawBytes.buffer.asUint32List();
-        // for (int i = 0; i < u32list.length; i++) {
-        //   final u32 = u32list[i];
-        //   u32list[i] =
-        //       (u32 & 0xFF00FF00) |
-        //       ((u32 & 0x00FF0000) >> 16) |
-        //       ((u32 & 0x000000FF) << 16);
-        // }
 
         replyPort.send({
           'success': true,
