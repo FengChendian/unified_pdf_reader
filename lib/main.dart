@@ -7,6 +7,7 @@ import 'package:unified_pdf_reader/cache_list.dart';
 import 'package:unified_pdf_reader/mupdf/mupdf.dart';
 import 'package:unified_pdf_reader/scrollbar.dart';
 import 'providers/pdf_reader_provider.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 void main() {
   runApp(ProviderScope(child: PdfReaderApp()));
@@ -37,7 +38,7 @@ class PdfReaderApp extends StatelessWidget {
 
         iconTheme: const IconThemeData(size: 20, color: Colors.black54),
 
-        textTheme: const TextTheme(bodyMedium: TextStyle(fontSize: 13)),
+        textTheme: GoogleFonts.notoSansScTextTheme(),
       ),
       home: const PdfReaderPage(),
     );

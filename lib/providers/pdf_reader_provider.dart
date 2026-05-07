@@ -22,6 +22,9 @@ class PdfReaderState {
   final double globalScale;
   final bool isCtrlPressed;
   final Map<int, double> pageOriginalHeights;
+  final Map<int, double> accumulatedScaledPageHeights;
+  final double maxScaledPageSumHeight;
+
   final Map<String, Map<int, List<int>>> docRawPageSizes;
   final SendPort? pdfSendPort;
   final bool isPageIndicatorVisible;
@@ -45,6 +48,8 @@ class PdfReaderState {
     this.globalScale = 1.0,
     this.isCtrlPressed = false,
     this.pageOriginalHeights = const {},
+    this.accumulatedScaledPageHeights = const {},
+    this.maxScaledPageSumHeight = 0.0,
     this.docRawPageSizes = const {},
     this.pdfSendPort,
     this.isPageIndicatorVisible = true,
@@ -68,6 +73,8 @@ class PdfReaderState {
     double? globalScale,
     bool? isCtrlPressed,
     Map<int, double>? pageOriginalHeights,
+    Map<int, double>? accumulatedScaledPageHeights,
+    double? maxScaledPageSumHeight,
     Map<String, Map<int, List<int>>>? docRawPageSizes,
     SendPort? pdfSendPort,
     bool? isPageIndicatorVisible,
@@ -94,6 +101,10 @@ class PdfReaderState {
       globalScale: globalScale ?? this.globalScale,
       isCtrlPressed: isCtrlPressed ?? this.isCtrlPressed,
       pageOriginalHeights: pageOriginalHeights ?? this.pageOriginalHeights,
+      accumulatedScaledPageHeights:
+          accumulatedScaledPageHeights ?? this.accumulatedScaledPageHeights,
+      maxScaledPageSumHeight:
+          maxScaledPageSumHeight ?? this.maxScaledPageSumHeight,
       docRawPageSizes: docRawPageSizes ?? this.docRawPageSizes,
       pdfSendPort: pdfSendPort ?? this.pdfSendPort,
       isPageIndicatorVisible:
@@ -136,7 +147,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   static const double _separatorHeight = 10.0;
   static const double _highResScaleFactor = 5.0;
-  static const double _verticalPadding = 5.0;
+  // static const double _verticalPadding = 5.0;
 
   /// 高清晰度渲染窗口半径：当前页前后各几页
   static const int _highResWindowRadius = 2;
@@ -172,14 +183,16 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     // Map<int, double> pageHeights,
   ) {
     final result = <double>[];
-    // final accumulatedHeights = Map.of(state.accumulatedPageHeights);
+    final accumulatedHeights = <int, double>{};
 
-    double totalHeight = _verticalPadding;
+    double totalHeight = 0;
     double detectionLineHeight = totalHeight;
     final residualRatio = 1 - ratio;
     final scale = state.globalScale;
 
     for (int i = 0; i < state.totalPages; i++) {
+      accumulatedHeights[i] = totalHeight;
+
       final scaledHeight = (state.pageOriginalHeights[i] ?? 0.0) * scale;
       totalHeight += scaledHeight;
 
@@ -187,12 +200,13 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       result.add(detectionLineHeight);
 
       totalHeight += _separatorHeight;
-      // accumulatedHeights[i] = totalHeight;
     }
-    // result.add(totalHeight); // 添加最后的总高度作为边界
     _detectionLineHeights = result;
 
-    // state = state.copyWith(accumulatedPageHeights: accumulatedHeights);
+    state = state.copyWith(
+      maxScaledPageSumHeight: totalHeight,
+      accumulatedScaledPageHeights: accumulatedHeights,
+    );
   }
 
   bool _handleKeyEvent(KeyEvent event) {
@@ -219,11 +233,15 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     if (_detectionLineHeights.isEmpty) return;
 
     final scrollOffset = scrollController.offset;
-    int newPage = 0; /// From 0 to totalPages-1
+    int newPage = 0;
 
+    /// From 0 to totalPages-1
 
     for (
-      int i = (state.currentPage - 1).clamp(0, _detectionLineHeights.length - 1);
+      int i = (state.currentPage - 1).clamp(
+        0,
+        _detectionLineHeights.length - 1,
+      );
       i < _detectionLineHeights.length - 1;
       i++
     ) {
@@ -613,7 +631,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         final outline = initResult['outline'] as List<OutlineItem>? ?? [];
         // print(outline.first.children.first.title);
 
-
         for (final entry in renderedPixedMap.entries) {
           final pageIndex = entry.key;
           final data = entry.value;
@@ -691,9 +708,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   }
 
   void toggleOutlinePanel() {
-    state = state.copyWith(
-      isOutlinePanelOpen: !state.isOutlinePanelOpen,
-    );
+    state = state.copyWith(isOutlinePanelOpen: !state.isOutlinePanelOpen);
   }
 
   void toggleOutlineExpand(String id) {
@@ -708,16 +723,17 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   void jumpToPage(int page, ScrollController scrollController) {
     if (!scrollController.hasClients) return;
-    const double topPadding = 5.0;
-    const double separatorHeight = 10.0;
+    // const double topPadding = .0;
+    // const double separatorHeight = 10.0;
     final double gapsHeightAboveCursor =
-        topPadding + (page * (separatorHeight + (state.pageOriginalHeights[page]?.toDouble() ?? 0.0) * state.globalScale));
+        (state.accumulatedScaledPageHeights[page]?.toDouble() ?? 0.0);
+
     scrollController.animateTo(
       gapsHeightAboveCursor,
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeInOut,
     );
-    toggleOutlinePanel();
+    // toggleOutlinePanel();
   }
 
   void _closePdf() {
