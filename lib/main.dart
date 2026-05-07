@@ -3,8 +3,9 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:super_sliver_list/super_sliver_list.dart';
+import 'package:unified_pdf_reader/cache_list.dart';
 import 'package:unified_pdf_reader/mupdf/mupdf.dart';
+import 'package:unified_pdf_reader/scrollbar.dart';
 import 'providers/pdf_reader_provider.dart';
 
 void main() {
@@ -108,6 +109,17 @@ class PdfReaderPage extends HookConsumerWidget {
                     bottom: 16,
                     child: PageIndicator(),
                   ),
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: CustomScrollbar(
+                    controller: scrollController,
+                    thickness: 6,
+                    radius: const Radius.circular(3),
+                    color: const Color(0xFF9CA3AF),
+                  ),
+                ),
               ],
             ),
           ),
@@ -221,6 +233,20 @@ class PdfReaderPage extends HookConsumerWidget {
     double globalScale,
   ) {
     final screenWidth = MediaQuery.of(context).size.width;
+
+    final heightsOnDevice = List<double>.generate(totalPages * 2, (index) {
+      if (index.isOdd) {
+        return 10; // separator height
+      }
+
+      final pageIndex = index ~/ 2;
+      if (pageHeights != null && pageHeights[pageIndex] != null) {
+        return pageHeights[pageIndex]! * globalScale;
+      } else {
+        return 842 / View.of(context).devicePixelRatio * globalScale; // 默认高度
+      }
+    });
+
     return Container(
       // color: Colors.grey[200],
       decoration: const BoxDecoration(
@@ -236,48 +262,94 @@ class PdfReaderPage extends HookConsumerWidget {
         children: [
           SizedBox(
             width: math.max(currentMaxWidth, screenWidth),
-            child: ListView.builder(
-              itemCount: totalPages * 2,
-              itemExtentBuilder: (index, dimensions) {
-                // if (pageHeights != null) {
-                if (index.isEven) {
-                  // print(1);
-                  if (pageHeights![index ~/ 2] != null) {
-                    // print('Height for page ${index ~/ 2} is not available yet.');
-                    return pageHeights[index ~/ 2]! * globalScale;
-                  } else {
-                    return 842 /
-                        View.of(context).devicePixelRatio *
-                        globalScale; // 默认高度
-                  }
-                } else {
-                  return 10; // separator height
-                }
-                // }
-                // return ;
-              },
-              // key: listViewKey,
-              controller: scrollController,
-              physics: isCtrlPressed
-                  ? const NeverScrollableScrollPhysics()
-                  : const ClampingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(vertical: 5),
-              itemBuilder: (context, index) {
-                if (index.isOdd) {
-                  return const SizedBox(height: 10);
-                } else {
-                  final i = index ~/ 2;
-                  return PdfPageWidget(
-                    key: ValueKey('page_${fileHash}_$i'),
-                    pageIndex: i,
-                  );
-                }
-              },
+            child: ScrollConfiguration(
+              behavior: const ScrollBehavior().copyWith(scrollbars: false),
+              child: CustomScrollView(
+                // key: listViewKey,
+                controller: scrollController,
+                physics: isCtrlPressed
+                    ? const NeverScrollableScrollPhysics()
+                    : const ClampingScrollPhysics(),
+                slivers: [
+                  VariedExtentList(
+                    delegate: SliverChildBuilderDelegate((context, index) {
+                      if (index.isOdd) {
+                        return const SizedBox(height: 10);
+                      }
+
+                      final i = index ~/ 2;
+                      return PdfPageWidget(
+                        key: ValueKey('page_${fileHash}_$i'),
+                        pageIndex: i,
+                      );
+                    }, childCount: totalPages * 2),
+                    itemExtents: heightsOnDevice,
+                    // globalScale: globalScale,
+                  ),
+                ],
+              ),
             ),
           ),
         ],
       ),
     );
+    // return Container(
+    //   // color: Colors.grey[200],
+    //   decoration: const BoxDecoration(
+    //     gradient: LinearGradient(
+    //       colors: [Color(0xFFF5F7FA), Color(0xFFEDEFF3)],
+    //       begin: Alignment.topCenter,
+    //       end: Alignment.bottomCenter,
+    //     ),
+    //   ),
+    //   child: ListView(
+    //     scrollDirection: Axis.horizontal,
+    //     controller: horizontalScrollController,
+    //     children: [
+    //       SizedBox(
+    //         width: math.max(currentMaxWidth, screenWidth),
+    //         child: ListView.builder(
+    //           itemCount: totalPages * 2,
+    //           itemExtentBuilder: (index, dimensions) {
+    //             // if (pageHeights != null) {
+    //             if (index.isEven) {
+    //               // print(1);
+    //               if (pageHeights![index ~/ 2] != null) {
+    //                 // print('Height for page ${index ~/ 2} is not available yet.');
+    //                 return pageHeights[index ~/ 2]! * globalScale;
+    //               } else {
+    //                 return 842 /
+    //                     View.of(context).devicePixelRatio *
+    //                     globalScale; // 默认高度
+    //               }
+    //             } else {
+    //               return 10; // separator height
+    //             }
+    //             // }
+    //             // return ;
+    //           },
+    //           // key: listViewKey,
+    //           controller: scrollController,
+    //           physics: isCtrlPressed
+    //               ? const NeverScrollableScrollPhysics()
+    //               : const ClampingScrollPhysics(),
+    //           padding: const EdgeInsets.symmetric(vertical: 5),
+    //           itemBuilder: (context, index) {
+    //             if (index.isOdd) {
+    //               return const SizedBox(height: 10);
+    //             } else {
+    //               final i = index ~/ 2;
+    //               return PdfPageWidget(
+    //                 key: ValueKey('page_${fileHash}_$i'),
+    //                 pageIndex: i,
+    //               );
+    //             }
+    //           },
+    //         ),
+    //       ),
+    //     ],
+    //   ),
+    // );
   }
 
   Widget _buildTitleBar(String? filePath) {
