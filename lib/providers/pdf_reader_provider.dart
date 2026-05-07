@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
@@ -31,6 +32,9 @@ class PdfReaderState {
   // final bool isHorizontalMode;
   final int originalPagesMaxWidth;
   final bool isLoading;
+  final List<OutlineItem> outline;
+  final bool isOutlinePanelOpen;
+  final Set<String> expandedOutlineIds;
 
   const PdfReaderState({
     this.filePath,
@@ -41,7 +45,6 @@ class PdfReaderState {
     this.globalScale = 1.0,
     this.isCtrlPressed = false,
     this.pageOriginalHeights = const {},
-    // this.accumulatedPageHeights = const {},
     this.docRawPageSizes = const {},
     this.pdfSendPort,
     this.isPageIndicatorVisible = true,
@@ -49,9 +52,11 @@ class PdfReaderState {
     this.pageImages = const {},
     this.highResPageImages = const {},
     this.viewportWidth = 0.0,
-    // this.isHorizontalMode = false,
     this.originalPagesMaxWidth = 0,
     this.isLoading = false,
+    this.outline = const [],
+    this.isOutlinePanelOpen = false,
+    this.expandedOutlineIds = const {},
   });
 
   PdfReaderState copyWith({
@@ -70,11 +75,13 @@ class PdfReaderState {
     Map<int, ui.Image>? pageImages,
     Map<int, ui.Image>? highResPageImages,
     double? viewportWidth,
-    // bool? isHorizontalMode,
     bool clearFilePath = false,
     bool clearErrorMessage = false,
-    int? originalMaxWidth,
+    int? originalPagesMaxWidth,
     bool? isLoading,
+    List<OutlineItem>? outline,
+    bool? isOutlinePanelOpen,
+    Set<String>? expandedOutlineIds,
   }) {
     return PdfReaderState(
       filePath: clearFilePath ? null : (filePath ?? this.filePath),
@@ -95,9 +102,12 @@ class PdfReaderState {
       pageImages: pageImages ?? this.pageImages,
       highResPageImages: highResPageImages ?? this.highResPageImages,
       viewportWidth: viewportWidth ?? this.viewportWidth,
-      // isHorizontalMode: isHorizontalMode ?? this.isHorizontalMode,
-      originalPagesMaxWidth: originalMaxWidth ?? this.originalPagesMaxWidth,
+      originalPagesMaxWidth:
+          originalPagesMaxWidth ?? this.originalPagesMaxWidth,
       isLoading: isLoading ?? this.isLoading,
+      outline: outline ?? this.outline,
+      isOutlinePanelOpen: isOutlinePanelOpen ?? this.isOutlinePanelOpen,
+      expandedOutlineIds: expandedOutlineIds ?? this.expandedOutlineIds,
     );
   }
 }
@@ -117,19 +127,24 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   List<double> _detectionLineHeights = [];
 
   Timer? _hideIndicatorTimer;
-  Timer? _highResDebounceTimer;
-  
+  Timer? _highResRenderTimer;
 
-  final Set<int> _renderingHighResPages = <int>{};
+  final Queue<int> _highResRenderQueue = Queue<int>();
+  bool _isRenderingHighRes = false;
+  int? _currentlyRenderingPage;
+  double _lastDevicePixelRatio = 1.0;
 
   static const double _separatorHeight = 10.0;
   static const double _highResScaleFactor = 5.0;
   static const double _verticalPadding = 5.0;
 
   /// 高清晰度渲染窗口半径：当前页前后各几页
-  static const int _highResWindowRadius = 3;
+  static const int _highResWindowRadius = 2;
 
-  final GlobalKey listViewKey = GlobalKey();
+  /// 高清渲染队列轮询间隔
+  static const Duration _highResRenderInterval = Duration(milliseconds: 100);
+
+  // final GlobalKey listViewKey = GlobalKey();
 
   @override
   PdfReaderState build() {
@@ -139,12 +154,16 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _hideIndicatorTimer?.cancel();
-    _highResDebounceTimer?.cancel();
+    _highResRenderTimer?.cancel();
     _closePdf();
   }
 
   void initialize() {
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+    _highResRenderTimer = Timer.periodic(
+      _highResRenderInterval,
+      (_) => _processHighResQueueTick(),
+    );
   }
 
   /// 计算检测线位置的实际高度
@@ -170,7 +189,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       totalHeight += _separatorHeight;
       // accumulatedHeights[i] = totalHeight;
     }
-
+    // result.add(totalHeight); // 添加最后的总高度作为边界
     _detectionLineHeights = result;
 
     // state = state.copyWith(accumulatedPageHeights: accumulatedHeights);
@@ -195,17 +214,19 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     ScrollController scrollController,
     double devicePixelRatio,
   ) async {
+    _lastDevicePixelRatio = devicePixelRatio;
     if (state.totalPages == 0 || !scrollController.hasClients) return;
     if (_detectionLineHeights.isEmpty) return;
 
     final scrollOffset = scrollController.offset;
-    int newPage = 0;
-    final startIndex = (state.currentPage - 1).clamp(
-      0,
-      _detectionLineHeights.length,
-    );
+    int newPage = 0; /// From 0 to totalPages-1
 
-    for (int i = startIndex; i < _detectionLineHeights.length - 1; i++) {
+
+    for (
+      int i = (state.currentPage - 1).clamp(0, _detectionLineHeights.length - 1);
+      i < _detectionLineHeights.length - 1;
+      i++
+    ) {
       if (scrollOffset >= _detectionLineHeights[i] &&
           scrollOffset < _detectionLineHeights[i + 1]) {
         newPage = i + 1;
@@ -213,15 +234,32 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       }
     }
 
+    if (newPage == 0) {
+      if (scrollOffset >= _detectionLineHeights.last) {
+        newPage = state.totalPages - 1;
+      } else {
+        /// fallback: If the quick scroll causes currentPage to lag behind, start from the beginning to find the correct page. This is a trade-off to avoid misidentification of the current page.
+        /// 从头开始找，避免快速滚动时 currentPage 跟不上导致的识别错误
+        for (int i = 0; i < _detectionLineHeights.length - 1; i++) {
+          if (scrollOffset >= _detectionLineHeights[i] &&
+              scrollOffset < _detectionLineHeights[i + 1]) {
+            newPage = i + 1;
+            break;
+          }
+        }
+      }
+    }
+
+    if (newPage == 0 && scrollOffset >= _detectionLineHeights.first) {
+      throw Exception("暂时无法正确识别当前页");
+    }
+
     newPage = newPage.clamp(0, state.totalPages - 1);
 
     if (newPage != state.currentPage) {
       state = state.copyWith(currentPage: newPage);
       showPageIndicator();
-      _highResDebounceTimer?.cancel();
-      _highResDebounceTimer = Timer(const Duration(milliseconds: 100), () async{
-        await _updateHighResCache(devicePixelRatio);
-      });
+      _enqueueHighResRender(devicePixelRatio);
     }
   }
 
@@ -241,8 +279,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     return completer.future;
   }
 
-  Future<void> _updateHighResCache(double devicePixelRatio) async {
-    // print("object");
+  void _enqueueHighResRender(double devicePixelRatio) {
+    _lastDevicePixelRatio = devicePixelRatio;
     if (state.totalPages == 0) return;
 
     final int start = (state.currentPage - _highResWindowRadius).clamp(
@@ -253,63 +291,105 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       0,
       state.totalPages - 1,
     );
-    final targetPages = {for (int i = start; i <= end; i++) i};
 
-    // Remove pages outside the window
-    final toRemove = state.highResPageImages.keys
-        .where((k) => !targetPages.contains(k))
-        .toList();
+    // 1) 清理队列中已不在窗口内的过时项（快速滚动后窗口外的入队项）
+    _highResRenderQueue.removeWhere((p) => p < start || p > end);
 
-    // Add pages inside the window that are not yet cached or rendering
-    // Sort by distance from current page so nearby pages render first
-    final toAdd =
-        targetPages
-            .where(
-              (p) =>
-                  !state.highResPageImages.containsKey(p) &&
-                  !_renderingHighResPages.contains(p),
-            )
-            .toList()
-          ..sort(
-            (a, b) => (a - state.currentPage).abs().compareTo(
-              (b - state.currentPage).abs(),
-            ),
-          );
-    // print(toAdd);
-    for (final pageIndex in toAdd) {
-      _renderingHighResPages.add(pageIndex);
-      final renderScale = _highResScaleFactor * devicePixelRatio;
-
-      // print("awaiting render of page $pageIndex with scale $renderScale");
-      final result = await _renderPage(pageIndex, scale: renderScale);
-      // print("render result for page $pageIndex: $result");
-      if (result != null && result['success']) {
-        final img = await _decodeImageFromPixels(
-          result['data'],
-          result['width'],
-          result['height'],
-        );
-        // _renderingHighResPages.remove(pageIndex);
-        if (img != null) {
-          final newHighRes = Map<int, ui.Image>.of(state.highResPageImages);
-          newHighRes[pageIndex] = img;
-          state = state.copyWith(highResPageImages: newHighRes);
-        }
-      } else {
-        _renderingHighResPages.remove(pageIndex);
-      }
+    // 2) 计算 toAdd：窗口内、未缓存、不在队列中、不在渲染中，按距离当前页排序
+    final inQueue = _highResRenderQueue.toSet();
+    final toAdd = <int>[];
+    for (int p = start; p <= end; p++) {
+      if (state.highResPageImages.containsKey(p)) continue;
+      if (inQueue.contains(p)) continue;
+      if (p == _currentlyRenderingPage) continue;
+      toAdd.add(p);
     }
-    // print(_renderingHighResPages);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (toRemove.isNotEmpty) {
+    toAdd.sort(
+      (a, b) => (a - state.currentPage).abs().compareTo(
+        (b - state.currentPage).abs(),
+      ),
+    );
+    // print(toAdd);
+    _highResRenderQueue.addAll(toAdd);
+    // for (final p in toAdd) {
+    //   _highResRenderQueue.addLast(p);
+    // }
+
+    // 3) 驱逐窗口外缓存（保留原 addPostFrameCallback 模式以避免帧内 dispose）
+    final toRemove = state.highResPageImages.keys
+        .where((k) => k < start || k > end)
+        .toList();
+    if (toRemove.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (toRemove.isEmpty) return;
         final newHighRes = Map<int, ui.Image>.of(state.highResPageImages);
         for (final idx in toRemove) {
           newHighRes[idx]?.dispose();
           newHighRes.remove(idx);
         }
         state = state.copyWith(highResPageImages: newHighRes);
+      });
+    }
+  }
+
+  Future<void> _processHighResQueueTick() async {
+    if (_isRenderingHighRes) return; // 上一个还在跑就跳过
+    if (_highResRenderQueue.isEmpty) return;
+
+    _isRenderingHighRes = true;
+    try {
+      while (_highResRenderQueue.isNotEmpty) {
+        final int pageIndex = _highResRenderQueue.removeFirst();
+        // print(pageIndex);
+        // 二次校验：从入队到现在窗口可能已经变了
+        final int start = (state.currentPage - _highResWindowRadius).clamp(
+          0,
+          state.totalPages - 1,
+        );
+        final int end = (state.currentPage + _highResWindowRadius).clamp(
+          0,
+          state.totalPages - 1,
+        );
+        if (pageIndex < start || pageIndex > end) continue;
+        if (state.highResPageImages.containsKey(pageIndex)) continue;
+
+        _currentlyRenderingPage = pageIndex;
+        try {
+          final renderScale = _highResScaleFactor * _lastDevicePixelRatio;
+          final result = await _renderPage(pageIndex, scale: renderScale);
+          if (result == null || result['success'] != true) continue;
+
+          final img = await _decodeImageFromPixels(
+            result['data'],
+            result['width'],
+            result['height'],
+          );
+          if (img == null) continue;
+
+          // 三次校验：渲染期间窗口可能已经飘走，避免泄漏 GPU 内存到马上要驱逐的 map
+          // final int curStart = (state.currentPage - _highResWindowRadius).clamp(
+          //   0,
+          //   state.totalPages - 1,
+          // );
+          // final int curEnd = (state.currentPage + _highResWindowRadius).clamp(
+          //   0,
+          //   state.totalPages - 1,
+          // );
+          // if (pageIndex < curStart || pageIndex > curEnd) {
+          //   img.dispose();
+          //   continue;
+          // }
+
+          final newHighRes = Map<int, ui.Image>.of(state.highResPageImages);
+          newHighRes[pageIndex] = img;
+          state = state.copyWith(highResPageImages: newHighRes);
+        } finally {
+          _currentlyRenderingPage = null;
+        }
       }
-    });
+    } finally {
+      _isRenderingHighRes = false;
+    }
   }
 
   void handlePointerSignal(
@@ -380,7 +460,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   ]) {
     state = state.copyWith(globalScale: newScale);
 
-    onPageSizeMeasured();
+    onPageSizeChanged();
+
     restoreScrollAfterScale(scrollController);
 
     restoreHorizontalScrollAfterScale(
@@ -397,7 +478,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     }
   }
 
-  void onPageSizeMeasured() {
+  void onPageSizeChanged() {
     calculateDetectionLineHeights(0.75);
   }
 
@@ -424,12 +505,16 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       return;
     }
 
-    final clampedOffset = newOffset.clamp(
-      scrollController.position.minScrollExtent,
-      scrollController.position.maxScrollExtent,
-    );
+    // print(newOffset);
 
-    scrollController.jumpTo(clampedOffset);
+    // final clampedOffset = newOffset.clamp(
+    //   scrollController.position.minScrollExtent,
+    //   scrollController.position.maxScrollExtent,
+    // );
+
+    // print('$newOffset / ${scrollController.position.maxScrollExtent}');
+
+    scrollController.jumpTo(newOffset);
   }
 
   void restoreHorizontalScrollAfterScale(
@@ -525,6 +610,10 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         // print(renderedPixedMap);
         final pageImages = <int, ui.Image>{};
 
+        final outline = initResult['outline'] as List<OutlineItem>? ?? [];
+        // print(outline.first.children.first.title);
+
+
         for (final entry in renderedPixedMap.entries) {
           final pageIndex = entry.key;
           final data = entry.value;
@@ -558,14 +647,15 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           docRawPageSizes: pageRawSizesCache,
           pageOriginalHeights: pageHeights,
           pageImages: pageImages,
-          originalMaxWidth: originalMaxWidth,
+          originalPagesMaxWidth: originalMaxWidth,
           isLoading: false,
+          outline: outline,
         );
 
-        calculateDetectionLineHeights(0.75);
+        onPageSizeChanged();
 
         // print('PDF 初始化成功，页数：${state.totalPages}，原始最大宽度：${state.originalMaxWidth}');
-        await _updateHighResCache(devicePixelRatio);
+        _enqueueHighResRender(devicePixelRatio);
         // print('PDF 初始化成功，页数：${state.totalPages}，原始最大宽度：${state.originalMaxWidth}');
         // print(" PDF 页面渲染完成");
       } else {
@@ -600,6 +690,36 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     state = state.copyWith(isPageIndicatorVisible: false);
   }
 
+  void toggleOutlinePanel() {
+    state = state.copyWith(
+      isOutlinePanelOpen: !state.isOutlinePanelOpen,
+    );
+  }
+
+  void toggleOutlineExpand(String id) {
+    final newExpandedIds = Set<String>.from(state.expandedOutlineIds);
+    if (newExpandedIds.contains(id)) {
+      newExpandedIds.remove(id);
+    } else {
+      newExpandedIds.add(id);
+    }
+    state = state.copyWith(expandedOutlineIds: newExpandedIds);
+  }
+
+  void jumpToPage(int page, ScrollController scrollController) {
+    if (!scrollController.hasClients) return;
+    const double topPadding = 5.0;
+    const double separatorHeight = 10.0;
+    final double gapsHeightAboveCursor =
+        topPadding + (page * (separatorHeight + (state.pageOriginalHeights[page]?.toDouble() ?? 0.0) * state.globalScale));
+    scrollController.animateTo(
+      gapsHeightAboveCursor,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+    toggleOutlinePanel();
+  }
+
   void _closePdf() {
     if (state.fileHash == null) return;
     _pdfReceivePort?.close();
@@ -613,11 +733,14 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     for (final image in state.highResPageImages.values) {
       image.dispose();
     }
-    _renderingHighResPages.clear();
+    _highResRenderQueue.clear();
+    _isRenderingHighRes = false;
+    _currentlyRenderingPage = null;
     state = state.copyWith(
       pageImages: {},
       highResPageImages: {},
       totalPages: 0,
+      outline: [],
     );
   }
 
@@ -659,6 +782,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         doc.open(path);
 
         final pageCount = doc.pageCount;
+        final outline = doc.getOutline();
         pageOriginalSizes = <int, List<int>>{};
 
         for (int i = 0; i < pageCount; i++) {
@@ -683,6 +807,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           'pageOriginalSizes': pageOriginalSizes,
           'originalMaxWidth': originalMaxWidth,
           'renderedPixedMap': renderedPixedMap,
+          'outline': outline,
         });
       } else if (type == 'render') {
         if (pageOriginalSizes == null) return;

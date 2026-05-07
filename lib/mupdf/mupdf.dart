@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -29,6 +30,14 @@ final class MuPdfImage extends Struct {
   external int components;
 
   external Pointer<Uint8> buffer;
+}
+
+/// 目录 JSON 结果结构体映射
+final class MuPdfOutlineJson extends Struct {
+  external Pointer<Utf8> json;
+
+  @Int32()
+  external int length;
 }
 
 // ==========================================
@@ -68,6 +77,12 @@ class MuPdfLibrary {
   late final void Function(Pointer<MuPdfContextOpaque>) ctxDestroy;
   late final void Function(Pointer<MuPdfImage>) imageFree;
   late final Pointer<Utf8> Function(Pointer<MuPdfContextOpaque>) lastError;
+  late final Pointer<MuPdfOutlineJson> Function(
+    Pointer<MuPdfContextOpaque>,
+    Pointer<MuPdfDocumentOpaque>,
+  )
+  docGetOutline;
+  late final void Function(Pointer<MuPdfOutlineJson>) outlineFree;
 
   /// 初始化并加载 DLL。默认从当前 exe 所在根目录加载
   MuPdfLibrary({String dllName = 'mupdf.dll'}) {
@@ -157,6 +172,24 @@ class MuPdfLibrary {
           Pointer<Utf8> Function(Pointer<MuPdfContextOpaque>),
           Pointer<Utf8> Function(Pointer<MuPdfContextOpaque>)
         >('mupdf_last_error');
+
+    docGetOutline = _dylib
+        .lookupFunction<
+          Pointer<MuPdfOutlineJson> Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+          ),
+          Pointer<MuPdfOutlineJson> Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+          )
+        >('mupdf_doc_get_outline');
+
+    outlineFree = _dylib
+        .lookupFunction<
+          Void Function(Pointer<MuPdfOutlineJson>),
+          void Function(Pointer<MuPdfOutlineJson>)
+        >('mupdf_outline_free');
   }
 }
 
@@ -179,6 +212,46 @@ class RenderedPage {
     required this.components,
     required this.pixels,
   });
+}
+
+/// PDF 目录项（大纲项）数据结构
+class OutlineItem {
+  final String title;
+  final String uri;
+  final int page;      // 页码 (-1 表示外部链接或无目标)
+  final bool isOpen;   // 是否展开
+  final int flags;     // 1=粗体，2=斜体
+  final List<OutlineItem> children;
+
+  bool get isBold => (flags & 1) != 0;
+  bool get isItalic => (flags & 2) != 0;
+
+  OutlineItem({
+    required this.title,
+    required this.uri,
+    required this.page,
+    required this.isOpen,
+    required this.flags,
+    required this.children,
+  });
+
+  /// 从 JSON 解析内部方法
+  static OutlineItem _parse(Map json) {
+    return OutlineItem(
+      title: json['title'] as String? ?? '',
+      uri: json['uri'] as String? ?? '',
+      page: json['page'] as int? ?? -1,
+      isOpen: json['isOpen'] as bool? ?? false,
+      flags: json['flags'] as int? ?? 0,
+      children: (json['children'] as List?)
+              ?.map((c) => _parse(c as Map))
+              .toList() ??
+          [],
+    );
+  }
+
+  /// 从 JSON 对象创建 OutlineItem
+  factory OutlineItem.fromJson(Map<String, dynamic> json) => _parse(json);
 }
 
 /// 独立的 PDF 文档实例，支持多文档同时操作
@@ -234,6 +307,31 @@ class PdfDocument {
       _throwLastError("Failed to get page count");
     }
     return count;
+  }
+
+  /// 获取文档目录（大纲/TOC）
+  /// 返回 OutlineItem 列表，支持嵌套子项
+  List<OutlineItem> getOutline() {
+    if (!isOpen) throw Exception("Document is not open.");
+
+    final outlinePtr = _lib.docGetOutline(_ctx, _doc);
+    if (outlinePtr == nullptr) {
+      _throwLastError("Failed to get outline");
+    }
+
+    try {
+      final outline = outlinePtr.ref;
+
+      // 获取 JSON 字符串
+      final jsonString = outline.json.toDartString();
+
+      // 解析 JSON 为 List<OutlineItem>
+      final parsed = jsonDecode(jsonString) as List;
+      return parsed.map((e) => OutlineItem._parse(e as Map)).toList();
+    } finally {
+      // 释放 C 层的 outline 结构
+      _lib.outlineFree(outlinePtr);
+    }
   }
 
   /// 渲染指定页面并获取独立的图像数据

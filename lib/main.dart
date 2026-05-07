@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:super_sliver_list/super_sliver_list.dart';
+import 'package:unified_pdf_reader/mupdf/mupdf.dart';
 import 'providers/pdf_reader_provider.dart';
 
 void main() {
@@ -18,8 +20,23 @@ class PdfReaderApp extends StatelessWidget {
       title: 'PDF Studio Pro',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
         useMaterial3: true,
+        brightness: Brightness.light,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF5C6BC0), // 更高级的蓝紫
+        ),
+        scaffoldBackgroundColor: const Color(0xFFF5F7FA),
+
+        appBarTheme: const AppBarTheme(
+          elevation: 0,
+          centerTitle: true,
+          backgroundColor: Colors.transparent,
+          foregroundColor: Colors.black87,
+        ),
+
+        iconTheme: const IconThemeData(size: 20, color: Colors.black54),
+
+        textTheme: const TextTheme(bodyMedium: TextStyle(fontSize: 13)),
       ),
       home: const PdfReaderPage(),
     );
@@ -46,7 +63,7 @@ class PdfReaderPage extends HookConsumerWidget {
 
     final scrollController = useScrollController();
     final horizontalScrollController = useScrollController();
-    final listViewKey = useMemoized(() => notifier.listViewKey, []);
+    // final listViewKey = useMemoized(() => notifier.listViewKey, []);
 
     useEffect(() {
       void listener() async {
@@ -60,30 +77,40 @@ class PdfReaderPage extends HookConsumerWidget {
       return () => scrollController.removeListener(listener);
     }, [scrollController]);
 
+    final outline = ref.watch(
+      pdfReaderProvider.select((state) => state.outline),
+    );
+    final isOutlinePanelOpen = ref.watch(
+      pdfReaderProvider.select((state) => state.isOutlinePanelOpen),
+    );
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text(filePath?.split('\\').last ?? 'PDF Studio'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.folder_open),
-            onPressed: () async =>
-                await notifier.pickPdf(View.of(context).devicePixelRatio),
-          ),
-        ],
-      ),
-      body: Stack(
+      body: Column(
         children: [
-          _buildBody(
-            context,
-            ref,
-            notifier,
-            scrollController,
-            horizontalScrollController,
-            listViewKey,
-            // state,
+          _buildTitleBar(filePath),
+          _buildToolbar(context, ref, notifier),
+          Expanded(
+            child: Stack(
+              children: [
+                _buildBody(
+                  context,
+                  ref,
+                  notifier,
+                  scrollController,
+                  horizontalScrollController,
+                  // listViewKey,
+                ),
+                if (outline.isNotEmpty && isOutlinePanelOpen)
+                  _buildOutlinePanel(context, ref, notifier, scrollController),
+                if (filePath != null)
+                  const Positioned(
+                    right: 16,
+                    bottom: 16,
+                    child: PageIndicator(),
+                  ),
+              ],
+            ),
           ),
-          if (filePath != null)
-            Positioned(right: 16, bottom: 16, child: PageIndicator()),
         ],
       ),
     );
@@ -95,7 +122,7 @@ class PdfReaderPage extends HookConsumerWidget {
     PdfReaderNotifier notifier,
     ScrollController scrollController,
     ScrollController horizontalScrollController,
-    GlobalKey listViewKey,
+    // GlobalKey listViewKey,
   ) {
     final errorMessage = ref.watch(
       pdfReaderProvider.select((state) => state.errorMessage),
@@ -172,7 +199,7 @@ class PdfReaderPage extends HookConsumerWidget {
         fileHash,
         scrollController,
         horizontalScrollController,
-        listViewKey,
+        // listViewKey,
         pageHeights,
         currentMaxWidth,
         globalScale,
@@ -188,14 +215,21 @@ class PdfReaderPage extends HookConsumerWidget {
     String? fileHash,
     ScrollController scrollController,
     ScrollController horizontalScrollController,
-    GlobalKey listViewKey,
+    // GlobalKey listViewKey,
     Map<int, double>? pageHeights,
     double currentMaxWidth,
     double globalScale,
   ) {
     final screenWidth = MediaQuery.of(context).size.width;
     return Container(
-      color: Colors.grey[200],
+      // color: Colors.grey[200],
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFFF5F7FA), Color(0xFFEDEFF3)],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+      ),
       child: ListView(
         scrollDirection: Axis.horizontal,
         controller: horizontalScrollController,
@@ -205,16 +239,24 @@ class PdfReaderPage extends HookConsumerWidget {
             child: ListView.builder(
               itemCount: totalPages * 2,
               itemExtentBuilder: (index, dimensions) {
-                if (pageHeights != null) {
-                  if (index.isEven) {
+                // if (pageHeights != null) {
+                if (index.isEven) {
+                  // print(1);
+                  if (pageHeights![index ~/ 2] != null) {
+                    // print('Height for page ${index ~/ 2} is not available yet.');
                     return pageHeights[index ~/ 2]! * globalScale;
                   } else {
-                    return 10; // separator height
+                    return 842 /
+                        View.of(context).devicePixelRatio *
+                        globalScale; // 默认高度
                   }
+                } else {
+                  return 10; // separator height
                 }
-                return null;
+                // }
+                // return ;
               },
-              key: listViewKey,
+              // key: listViewKey,
               controller: scrollController,
               physics: isCtrlPressed
                   ? const NeverScrollableScrollPhysics()
@@ -225,12 +267,155 @@ class PdfReaderPage extends HookConsumerWidget {
                   return const SizedBox(height: 10);
                 } else {
                   final i = index ~/ 2;
-                  return PdfPageWidget(key: ValueKey('page_$i'), pageIndex: i);
+                  return PdfPageWidget(
+                    key: ValueKey('page_${fileHash}_$i'),
+                    pageIndex: i,
+                  );
                 }
               },
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildTitleBar(String? filePath) {
+    return Container(
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.8),
+        border: Border(
+          bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.picture_as_pdf, size: 18, color: Colors.redAccent),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              filePath?.split('\\').last ?? 'PDF Studio',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildToolbar(
+    BuildContext context,
+    WidgetRef ref,
+    PdfReaderNotifier notifier,
+  ) {
+    final outline = ref.watch(
+      pdfReaderProvider.select((state) => state.outline),
+    );
+
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(color: Colors.white),
+      child: Row(
+        children: [
+          if (outline.isNotEmpty)
+            _toolbarButton(
+              icon: Icons.menu_book_outlined,
+              tooltip: '目录',
+              onTap: notifier.toggleOutlinePanel,
+            ),
+          const Spacer(),
+          _toolbarButton(
+            icon: Icons.folder_open_rounded,
+            tooltip: '打开文件',
+            onTap: () async =>
+                await notifier.pickPdf(View.of(context).devicePixelRatio),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _toolbarButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Container(padding: const EdgeInsets.all(8), child: Icon(icon)),
+      ),
+    );
+  }
+
+  Widget _buildOutlinePanel(
+    BuildContext context,
+    WidgetRef ref,
+    PdfReaderNotifier notifier,
+    ScrollController scrollController,
+  ) {
+    final outline = ref.watch(
+      pdfReaderProvider.select((state) => state.outline),
+    );
+    final expandedIds = ref.watch(
+      pdfReaderProvider.select((state) => state.expandedOutlineIds),
+    );
+
+    return Positioned(
+      left: 0,
+      top: 0,
+      bottom: 0,
+      child: Material(
+        elevation: 4,
+        child: Container(
+          width: 280,
+          color: Colors.white,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                alignment: Alignment.centerLeft,
+                decoration: BoxDecoration(
+                  border: Border(bottom: BorderSide(color: Colors.grey[300]!)),
+                ),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '目录',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 18),
+                      onPressed: notifier.toggleOutlinePanel,
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: OutlineTreeWidget(
+                  items: outline,
+                  expandedIds: expandedIds,
+                  onToggleExpand: notifier.toggleOutlineExpand,
+                  onJumpToPage: (page) =>
+                      notifier.jumpToPage(page, scrollController),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -347,6 +532,205 @@ class PageIndicator extends HookConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class OutlineTreeWidget extends HookConsumerWidget {
+  final List<OutlineItem> items;
+  final Set<String> expandedIds;
+  final void Function(String id) onToggleExpand;
+  final void Function(int page) onJumpToPage;
+  final int depth;
+
+  const OutlineTreeWidget({
+    super.key,
+    required this.items,
+    required this.expandedIds,
+    required this.onToggleExpand,
+    required this.onJumpToPage,
+    this.depth = 0,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // 只在 depth=0 时使用 ListView 避免循环嵌套
+    if (depth == 0) {
+      return ListView.builder(
+        shrinkWrap: true,
+        physics: const ClampingScrollPhysics(),
+        itemCount: items.length,
+        itemBuilder: (context, index) {
+          final item = items[index];
+          final id = '${item.title}_${item.page}_${depth}_$index';
+          final isExpanded = expandedIds.contains(id);
+          final hasChildren = item.children.isNotEmpty;
+          return OutlineItemWidget(
+            item: item,
+            id: id,
+            isExpanded: isExpanded,
+            hasChildren: hasChildren,
+            expandedIds: expandedIds,
+            onToggleExpand: onToggleExpand,
+            onJumpToPage: onJumpToPage,
+            depth: depth,
+          );
+        },
+      );
+    }
+
+    // 子级使用 Column 避免递归 ListView
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: items.asMap().entries.map((entry) {
+        final index = entry.key;
+        final item = entry.value;
+        final id = '${item.title}_${item.page}_${depth}_$index';
+        final isExpanded = expandedIds.contains(id);
+        final hasChildren = item.children.isNotEmpty;
+        return OutlineItemWidget(
+          item: item,
+          id: id,
+          isExpanded: isExpanded,
+          hasChildren: hasChildren,
+          expandedIds: expandedIds,
+          onToggleExpand: onToggleExpand,
+          onJumpToPage: onJumpToPage,
+          depth: depth,
+        );
+      }).toList(),
+    );
+  }
+}
+
+class OutlineItemWidget extends HookWidget {
+  final OutlineItem item;
+  final String id;
+  final bool isExpanded;
+  final bool hasChildren;
+  final Set<String> expandedIds;
+  final void Function(String id) onToggleExpand;
+  final void Function(int page) onJumpToPage;
+  final int depth;
+
+  const OutlineItemWidget({
+    super.key,
+    required this.item,
+    required this.id,
+    required this.isExpanded,
+    required this.hasChildren,
+    required this.expandedIds,
+    required this.onToggleExpand,
+    required this.onJumpToPage,
+    required this.depth,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isHovered = useState(false);
+
+    final bool isRoot = depth == 0;
+
+    // 1. 统一处理点击事件
+    void Function()? onTapHandler;
+    if (hasChildren) {
+      onTapHandler = () => onToggleExpand(id);
+    } else if (item.page >= 0) {
+      onTapHandler = () => onJumpToPage(item.page);
+    }
+
+    // 2. 提取差异化样式与缩进配置
+    final double iconSize = isRoot ? 18.0 : 16.0;
+    final double fontSize = isRoot ? 13.0 : 12.0;
+    final FontWeight fontWeight = isRoot ? FontWeight.w500 : FontWeight.normal;
+
+    // 根节点容器无内边距，子节点根据 depth 逐级计算内边距
+    final EdgeInsetsGeometry containerPadding = isRoot
+        ? EdgeInsets.zero
+        : EdgeInsets.only(left: 12 + (depth - 1) * 16.0);
+
+    // 3. 构建子节点树 (如果展开的话)
+    Widget? childrenTreeWidget;
+    if (hasChildren && isExpanded) {
+      childrenTreeWidget = OutlineTreeWidget(
+        items: item.children,
+        expandedIds: expandedIds,
+        onToggleExpand: onToggleExpand,
+        onJumpToPage: onJumpToPage,
+        depth: depth + 1,
+      );
+
+      // 根节点的子树独有外层 24 的 Padding 缩进
+      if (isRoot) {
+        childrenTreeWidget = Padding(
+          padding: const EdgeInsets.only(left: 24),
+          child: childrenTreeWidget,
+        );
+      }
+    }
+
+    // 4. 统一的结构渲染
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        MouseRegion(
+          onEnter: (_) => isHovered.value = true,
+          onExit: (_) => isHovered.value = false,
+          cursor: onTapHandler != null
+              ? SystemMouseCursors.click
+              : MouseCursor.defer,
+          child: InkWell(
+            onTap: onTapHandler,
+            hoverColor: Colors.transparent,
+            splashColor: Colors.transparent,
+            highlightColor: Colors.transparent,
+            child: Container(
+              height: 32,
+              padding: containerPadding,
+              alignment: Alignment.centerLeft,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: const BorderRadius.only(
+                  topRight: Radius.circular(12),
+                  bottomRight: Radius.circular(12),
+                ),
+              ),
+              child: Row(
+                children: [
+                  if (hasChildren)
+                    SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: Icon(
+                        isExpanded
+                            ? Icons.keyboard_arrow_down
+                            : Icons.keyboard_arrow_right,
+                        size: iconSize,
+                        // color: Colors.black54,
+                      ),
+                    )
+                  else
+                    const SizedBox(width: 24),
+                  Expanded(
+                    child: Text(
+                      item.title,
+                      style: TextStyle(
+                        fontSize: fontSize,
+                        color: isHovered.value ? Colors.blue : Colors.black87,
+
+                        fontWeight: fontWeight,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        // 如果有子树并且处于展开状态，则渲染子树
+        ?childrenTreeWidget,
+      ],
     );
   }
 }

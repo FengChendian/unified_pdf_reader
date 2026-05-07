@@ -37,13 +37,14 @@ dependencies:
 
   # File picker for desktop platforms
   file_picker: ^11.0.2
-  pdfium_flutter: ^0.1.9
   ffi: ^2.2.0
   crypto: ^3.0.3
   hooks_riverpod: ^3.3.1
   flutter_riverpod: ^3.3.1
   flutter_hooks: ^0.21.3+1
   path: ^1.9.1
+  super_sliver_list: ^0.4.1
+  scrollable_positioned_list: ^0.3.8
 
 dev_dependencies:
   flutter_test:
