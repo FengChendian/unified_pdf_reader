@@ -467,6 +467,25 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     }
   }
 
+  /// Button-based zoom adjustment (anchors to viewport center).
+  void adjustZoom(
+    double delta,
+    ScrollController scrollController, [
+    ScrollController? hController,
+  ]) {
+    final newScale = (state.globalScale + delta).clamp(0.5, 8.0);
+    _oldScale = state.globalScale;
+    if (scrollController.hasClients) {
+      _scrollOffset = scrollController.offset;
+      _mouseY = scrollController.position.viewportDimension / 2;
+    }
+    if (hController != null && hController.hasClients) {
+      _mouseX = hController.position.viewportDimension / 2;
+      _horizontalScrollOffset = hController.offset;
+    }
+    onScaleChanged(newScale, scrollController);
+  }
+
   void onScaleChanged(
     double newScale,
     ScrollController scrollController, [
