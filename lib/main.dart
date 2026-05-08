@@ -1,3 +1,5 @@
+// ignore_for_file: non_constant_identifier_names
+
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -34,7 +36,7 @@ class PdfReaderApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final VirtualWindowFrameBuilder = VirtualWindowFrameInit();
+    final virtualWindowFrameBuilder = VirtualWindowFrameInit();
     return MaterialApp(
       title: 'PDF Studio Pro',
       debugShowCheckedModeBanner: false,
@@ -57,7 +59,7 @@ class PdfReaderApp extends StatelessWidget {
 
         textTheme: GoogleFonts.notoSansScTextTheme(),
       ),
-      builder: (context, child) => VirtualWindowFrameBuilder(context, child),
+      builder: (context, child) => virtualWindowFrameBuilder(context, child),
       home: const PdfReaderPage(),
     );
   }
@@ -382,7 +384,7 @@ class PdfReaderPage extends HookConsumerWidget {
           // ),
         ),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
           child: Row(
             children: [
               const Icon(
@@ -392,15 +394,31 @@ class PdfReaderPage extends HookConsumerWidget {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  filePath?.split('\\').last ?? 'PDF Studio',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
+                child: Transform.translate(
+                  offset: const Offset(0, -1),
+                  child: Text(
+                    filePath?.split('\\').last ?? 'PDF Studio',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  overflow: TextOverflow.ellipsis,
                 ),
               ),
+              WindowCaptionButton.minimize(
+                onPressed: () => windowManager.minimize(),
+              ),
+              WindowCaptionButton.maximize(
+                onPressed: () async {
+                  if (await windowManager.isMaximized()) {
+                    windowManager.unmaximize();
+                  } else {
+                    windowManager.maximize();
+                  }
+                },
+              ),
+              WindowCaptionButton.close(onPressed: () => windowManager.close()),
             ],
           ),
         ),
