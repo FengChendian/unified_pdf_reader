@@ -5,7 +5,9 @@
       "Bash(flutter analyze:*)",
       "Bash(flutter pub:*)",
       "WebSearch",
-      "WebFetch(domain:pub.dev)"
+      "WebFetch(domain:pub.dev)",
+      "Read(//c/Users/fengchendian/AppData/Local/Pub/Cache/hosted/pub.dev/riverpod-3.2.1/lib/src/providers/**)",
+      "Read(//c/Users/fengchendian/AppData/Local/Pub/Cache/hosted/pub.dev/riverpod-3.2.1/**)"
     ]
   }
 }

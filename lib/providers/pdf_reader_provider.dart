@@ -12,6 +12,18 @@ import 'package:file_picker/file_picker.dart';
 import 'package:crypto/crypto.dart';
 import 'package:unified_pdf_reader/mupdf/mupdf.dart';
 
+/// Tab 信息
+class TabInfo {
+  final String fileHash;
+  final String filePath;
+  final String fileName;
+  const TabInfo({
+    required this.fileHash,
+    required this.filePath,
+    required this.fileName,
+  });
+}
+
 /// PDF 阅读器状态
 class PdfReaderState {
   final String? filePath;
@@ -24,7 +36,6 @@ class PdfReaderState {
   final Map<int, double> pageOriginalHeights;
   final Map<int, double> accumulatedScaledPageHeights;
   final double maxScaledPageSumHeight;
-
   final Map<String, Map<int, List<int>>> docRawPageSizes;
   final SendPort? pdfSendPort;
   final bool isPageIndicatorVisible;
@@ -32,12 +43,12 @@ class PdfReaderState {
   final Map<int, ui.Image> pageImages;
   final Map<int, ui.Image> highResPageImages;
   final double viewportWidth;
-  // final bool isHorizontalMode;
   final int originalPagesMaxWidth;
   final bool isLoading;
   final List<OutlineItem> outline;
   final bool isOutlinePanelOpen;
   final Set<String> expandedOutlineIds;
+  final double savedScrollOffset;
 
   const PdfReaderState({
     this.filePath,
@@ -62,6 +73,7 @@ class PdfReaderState {
     this.outline = const [],
     this.isOutlinePanelOpen = false,
     this.expandedOutlineIds = const {},
+    this.savedScrollOffset = 0.0,
   });
 
   PdfReaderState copyWith({
@@ -89,6 +101,7 @@ class PdfReaderState {
     List<OutlineItem>? outline,
     bool? isOutlinePanelOpen,
     Set<String>? expandedOutlineIds,
+    double? savedScrollOffset,
   }) {
     return PdfReaderState(
       filePath: clearFilePath ? null : (filePath ?? this.filePath),
@@ -119,12 +132,16 @@ class PdfReaderState {
       outline: outline ?? this.outline,
       isOutlinePanelOpen: isOutlinePanelOpen ?? this.isOutlinePanelOpen,
       expandedOutlineIds: expandedOutlineIds ?? this.expandedOutlineIds,
+      savedScrollOffset: savedScrollOffset ?? this.savedScrollOffset,
     );
   }
 }
 
-/// PDF 阅读器 Notifier
+/// PDF 阅读器 Notifier（每个文档一个实例，通过 family provider 管理）
 class PdfReaderNotifier extends Notifier<PdfReaderState> {
+  final String fileHash;
+
+  PdfReaderNotifier(this.fileHash);
   Isolate? _pdfIsolate;
   ReceivePort? _pdfReceivePort;
   SendPort? _pdfSendPort;
@@ -147,41 +164,200 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   static const double _separatorHeight = 10.0;
   static const double _highResScaleFactor = 5.0;
-  // static const double _verticalPadding = 5.0;
 
-  /// 高清晰度渲染窗口半径：当前页前后各几页
   static const int _highResWindowRadius = 2;
-
-  /// 高清渲染队列轮询间隔
   static const Duration _highResRenderInterval = Duration(milliseconds: 100);
-
-  // final GlobalKey listViewKey = GlobalKey();
 
   @override
   PdfReaderState build() {
+    ref.onDispose(() {
+      fullDispose();
+    });
     return const PdfReaderState();
   }
 
-  void dispose() {
-    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
-    _hideIndicatorTimer?.cancel();
-    _highResRenderTimer?.cancel();
-    _closePdf();
+  // ─── 生命周期：首次打开 ────────────────────────────────────────────────
+
+  Future<void> fullInit(String path, double devicePixelRatio) async {
+    await _initPdf(path, devicePixelRatio, skipRender: false);
+    _startHighResTimer();
+    _enqueueHighResRender(devicePixelRatio);
   }
 
-  void initialize() {
-    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+  // ─── 生命周期：切回已打开的文档 ────────────────────────────────────────
+
+  Future<void> resume(String path, double devicePixelRatio) async {
+    await _initPdf(path, devicePixelRatio, skipRender: true);
+    _startHighResTimer();
+    _enqueueHighResRender(devicePixelRatio);
+  }
+
+  // ─── 生命周期：切走（保留缓存） ────────────────────────────────────────
+
+  void suspend() {
+    _stopHighResTimer();
+    _highResRenderQueue.clear();
+    _isRenderingHighRes = false;
+    _currentlyRenderingPage = null;
+    _killIsolate();
+    _pdfReceivePort?.close();
+    _pdfReceivePort = null;
+    _pdfSendPort = null;
+
+    for (final image in state.highResPageImages.values) {
+      image.dispose();
+    }
+    state = state.copyWith(
+      pdfSendPort: null,
+      highResPageImages: {},
+    );
+  }
+
+  // ─── 生命周期：关闭（全部清理） ────────────────────────────────────────
+
+  void fullDispose() {
+    _stopHighResTimer();
+    _hideIndicatorTimer?.cancel();
+    _highResRenderQueue.clear();
+    _isRenderingHighRes = false;
+    _currentlyRenderingPage = null;
+    _killIsolate();
+    _pdfReceivePort?.close();
+    _pdfReceivePort = null;
+    _pdfSendPort = null;
+
+    for (final image in state.pageImages.values) {
+      image.dispose();
+    }
+    for (final image in state.highResPageImages.values) {
+      image.dispose();
+    }
+    state = const PdfReaderState();
+  }
+
+  /// 供 Workspace 在切 tab 前保存滚动位置
+  void saveScrollOffset(double offset) {
+    state = state.copyWith(savedScrollOffset: offset);
+  }
+
+  // ─── 内部 init ─────────────────────────────────────────────────────────
+
+  Future<void> _initPdf(
+    String path,
+    double devicePixelRatio, {
+    required bool skipRender,
+  }) async {
+    try {
+      _killIsolate();
+      _pdfReceivePort = ReceivePort();
+      _pdfIsolate = await Isolate.spawn(
+        _pdfIsolateEntry,
+        _pdfReceivePort!.sendPort,
+      );
+
+      state = state.copyWith(isLoading: true);
+
+      final List<dynamic> initData = await _pdfReceivePort!.first;
+      _pdfSendPort = initData[0] as SendPort;
+
+      final bytes = await File(path).readAsBytes();
+      final fileHash = md5.convert(bytes).toString();
+      final responsePort = ReceivePort();
+      _pdfSendPort!.send({
+        'type': 'init',
+        'path': path,
+        'skipRender': skipRender,
+        'replyPort': responsePort.sendPort,
+      });
+
+      final initResult = await responsePort.first;
+      responsePort.close();
+
+      if (initResult['success']) {
+        final pageOriginalSizes =
+            initResult['pageOriginalSizes'] as Map<int, List<int>>? ?? {};
+
+        final int originalMaxWidth = initResult['originalMaxWidth'] ?? 0;
+
+        final Map<String, Map<int, List<int>>> pageRawSizesCache = {
+          fileHash: pageOriginalSizes,
+        };
+
+        Map<int, ui.Image> pageImages;
+        if (skipRender) {
+          pageImages = Map.of(state.pageImages);
+        } else {
+          final renderedPixedMap =
+              initResult['renderedPixedMap'] as Map<int, Uint8List>? ?? {};
+          pageImages = <int, ui.Image>{};
+          for (final entry in renderedPixedMap.entries) {
+            final pageIndex = entry.key;
+            final data = entry.value;
+            final pageSize = pageOriginalSizes[pageIndex];
+            if (pageSize != null) {
+              final img = await _decodeImageFromPixels(
+                data,
+                pageSize[0],
+                pageSize[1],
+              );
+              if (img != null) {
+                pageImages[pageIndex] = img;
+              }
+            }
+          }
+        }
+
+        final pageHeights = <int, double>{};
+        for (int i = 0; i < initResult['pageCount']; i++) {
+          pageHeights[i] =
+              (pageOriginalSizes[i]?[1].toDouble() ?? 0.0) / devicePixelRatio;
+        }
+
+        final outline = initResult['outline'] as List<OutlineItem>? ?? [];
+
+        state = state.copyWith(
+          filePath: path,
+          fileHash: fileHash,
+          totalPages: initResult['pageCount'],
+          pdfSendPort: _pdfSendPort,
+          docRawPageSizes: pageRawSizesCache,
+          pageOriginalHeights: pageHeights,
+          pageImages: pageImages,
+          originalPagesMaxWidth: originalMaxWidth,
+          isLoading: false,
+          outline: outline,
+        );
+
+        onPageSizeChanged();
+      } else {
+        state = state.copyWith(errorMessage: initResult['error'] as String);
+      }
+    } catch (e) {
+      state = state.copyWith(errorMessage: '加载 PDF 异常：$e');
+    }
+  }
+
+  void _killIsolate() {
+    _pdfIsolate?.kill(priority: Isolate.immediate);
+    _pdfIsolate = null;
+  }
+
+  void _startHighResTimer() {
+    _highResRenderTimer?.cancel();
     _highResRenderTimer = Timer.periodic(
       _highResRenderInterval,
       (_) => _processHighResQueueTick(),
     );
   }
 
-  /// 计算检测线位置的实际高度
-  void calculateDetectionLineHeights(
-    double ratio,
-    // Map<int, double> pageHeights,
-  ) {
+  void _stopHighResTimer() {
+    _highResRenderTimer?.cancel();
+    _highResRenderTimer = null;
+  }
+
+  // ─── 滚动 / 页面检测 ──────────────────────────────────────────────────
+
+  void calculateDetectionLineHeights(double ratio) {
     final result = <double>[];
     final accumulatedHeights = <int, double>{};
 
@@ -209,21 +385,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     );
   }
 
-  bool _handleKeyEvent(KeyEvent event) {
-    final isCtrl = HardwareKeyboard.instance.logicalKeysPressed.any(
-      (key) =>
-          key == LogicalKeyboardKey.controlLeft ||
-          key == LogicalKeyboardKey.controlRight ||
-          key == LogicalKeyboardKey.metaLeft ||
-          key == LogicalKeyboardKey.metaRight,
-    );
-
-    if (state.isCtrlPressed != isCtrl) {
-      onCtrlPressed(isCtrl);
-    }
-    return false;
-  }
-
   Future<void> onScrollChanged(
     ScrollController scrollController,
     double devicePixelRatio,
@@ -235,13 +396,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     final scrollOffset = scrollController.offset;
     int newPage = 0;
 
-    /// From 0 to totalPages-1
-
     for (
-      int i = (state.currentPage - 1).clamp(
-        0,
-        _detectionLineHeights.length - 1,
-      );
+      int i = (state.currentPage - 1).clamp(0, _detectionLineHeights.length - 1);
       i < _detectionLineHeights.length - 1;
       i++
     ) {
@@ -256,8 +412,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       if (scrollOffset >= _detectionLineHeights.last) {
         newPage = state.totalPages - 1;
       } else {
-        /// fallback: If the quick scroll causes currentPage to lag behind, start from the beginning to find the correct page. This is a trade-off to avoid misidentification of the current page.
-        /// 从头开始找，避免快速滚动时 currentPage 跟不上导致的识别错误
         for (int i = 0; i < _detectionLineHeights.length - 1; i++) {
           if (scrollOffset >= _detectionLineHeights[i] &&
               scrollOffset < _detectionLineHeights[i + 1]) {
@@ -280,6 +434,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       _enqueueHighResRender(devicePixelRatio);
     }
   }
+
+  // ─── 图片解码 ──────────────────────────────────────────────────────────
 
   Future<ui.Image?> _decodeImageFromPixels(
     Uint8List data,
@@ -310,10 +466,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       state.totalPages - 1,
     );
 
-    // 1) 清理队列中已不在窗口内的过时项（快速滚动后窗口外的入队项）
     _highResRenderQueue.removeWhere((p) => p < start || p > end);
 
-    // 2) 计算 toAdd：窗口内、未缓存、不在队列中、不在渲染中，按距离当前页排序
     final inQueue = _highResRenderQueue.toSet();
     final toAdd = <int>[];
     for (int p = start; p <= end; p++) {
@@ -327,13 +481,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         (b - state.currentPage).abs(),
       ),
     );
-    // print(toAdd);
     _highResRenderQueue.addAll(toAdd);
-    // for (final p in toAdd) {
-    //   _highResRenderQueue.addLast(p);
-    // }
 
-    // 3) 驱逐窗口外缓存（保留原 addPostFrameCallback 模式以避免帧内 dispose）
     final toRemove = state.highResPageImages.keys
         .where((k) => k < start || k > end)
         .toList();
@@ -351,15 +500,13 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   }
 
   Future<void> _processHighResQueueTick() async {
-    if (_isRenderingHighRes) return; // 上一个还在跑就跳过
+    if (_isRenderingHighRes) return;
     if (_highResRenderQueue.isEmpty) return;
 
     _isRenderingHighRes = true;
     try {
       while (_highResRenderQueue.isNotEmpty) {
         final int pageIndex = _highResRenderQueue.removeFirst();
-        // print(pageIndex);
-        // 二次校验：从入队到现在窗口可能已经变了
         final int start = (state.currentPage - _highResWindowRadius).clamp(
           0,
           state.totalPages - 1,
@@ -384,20 +531,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           );
           if (img == null) continue;
 
-          // 三次校验：渲染期间窗口可能已经飘走，避免泄漏 GPU 内存到马上要驱逐的 map
-          // final int curStart = (state.currentPage - _highResWindowRadius).clamp(
-          //   0,
-          //   state.totalPages - 1,
-          // );
-          // final int curEnd = (state.currentPage + _highResWindowRadius).clamp(
-          //   0,
-          //   state.totalPages - 1,
-          // );
-          // if (pageIndex < curStart || pageIndex > curEnd) {
-          //   img.dispose();
-          //   continue;
-          // }
-
           final newHighRes = Map<int, ui.Image>.of(state.highResPageImages);
           newHighRes[pageIndex] = img;
           state = state.copyWith(highResPageImages: newHighRes);
@@ -409,6 +542,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       _isRenderingHighRes = false;
     }
   }
+
+  // ─── 指针 / 缩放 ─────────────────────────────────────────────────────
 
   void handlePointerSignal(
     PointerSignalEvent event,
@@ -467,7 +602,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     }
   }
 
-  /// Button-based zoom adjustment (anchors to viewport center).
   void adjustZoom(
     double delta,
     ScrollController scrollController, [
@@ -542,15 +676,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       return;
     }
 
-    // print(newOffset);
-
-    // final clampedOffset = newOffset.clamp(
-    //   scrollController.position.minScrollExtent,
-    //   scrollController.position.maxScrollExtent,
-    // );
-
-    // print('$newOffset / ${scrollController.position.maxScrollExtent}');
-
     scrollController.jumpTo(newOffset);
   }
 
@@ -565,7 +690,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         newPagesMaxWidth < screenWidth) {
       return;
     }
-    // print("object");
 
     final double ratio = state.globalScale / _oldScale;
     final contentXOld = _horizontalScrollOffset + _mouseX - leftPadding;
@@ -577,138 +701,13 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       horizontalScrollController.position.minScrollExtent,
       newPagesMaxWidth,
     );
-    // print(clampedOffset);
     horizontalScrollController.jumpTo(clampedOffset);
   }
 
-  Future<void> pickPdf(double devicePixelRatio) async {
-    try {
-      FilePickerResult? result = await FilePicker.pickFiles(type: FileType.any);
-      if (result != null && result.files.single.path != null) {
-        final path = result.files.single.path!;
-        if (!path.toLowerCase().endsWith('.pdf')) {
-          state = state.copyWith(errorMessage: '请选择 PDF 文件');
-          return;
-        }
-
-        // state = state.copyWith(errorMessage: null);
-        // print(doc.pageCount);
-        await _initPdfIsolate(path, devicePixelRatio);
-        // await renderAllPages(devicePixelRatio);
-
-        // state = state.copyWith(errorMessage: null);
-      }
-    } catch (e) {
-      state = state.copyWith(errorMessage: '选择文件失败：$e');
-    }
-  }
-
-  Future<void> _initPdfIsolate(String path, double devicePixelRatio) async {
-    // state = state.copyWith(clearErrorMessage: true);
-
-    try {
-      _closePdf();
-      _pdfReceivePort = ReceivePort();
-      _pdfIsolate = await Isolate.spawn(
-        _pdfIsolateEntry,
-        _pdfReceivePort!.sendPort,
-      );
-
-      state = state.copyWith(isLoading: true);
-
-      final List<dynamic> initData = await _pdfReceivePort!.first;
-      _pdfSendPort = initData[0] as SendPort;
-
-      final bytes = await File(path).readAsBytes();
-      final fileHash = md5.convert(bytes).toString();
-      final responsePort = ReceivePort();
-      _pdfSendPort!.send({
-        'type': 'init',
-        'path': path,
-        // 'fileHash': fileHash,
-        'replyPort': responsePort.sendPort,
-      });
-
-      final initResult = await responsePort.first;
-      responsePort.close();
-
-      if (initResult['success']) {
-        final pageOriginalSizes =
-            initResult['pageOriginalSizes'] as Map<int, List<int>>? ?? {};
-
-        final int originalMaxWidth = initResult['originalMaxWidth'] ?? 0;
-
-        final Map<String, Map<int, List<int>>> pageRawSizesCache = {
-          fileHash: pageOriginalSizes,
-        };
-
-        final renderedPixedMap =
-            initResult['renderedPixedMap'] as Map<int, Uint8List>? ?? {};
-        // print(renderedPixedMap);
-        final pageImages = <int, ui.Image>{};
-
-        final outline = initResult['outline'] as List<OutlineItem>? ?? [];
-        // print(outline.first.children.first.title);
-
-        for (final entry in renderedPixedMap.entries) {
-          final pageIndex = entry.key;
-          final data = entry.value;
-          final pageSize = pageOriginalSizes[pageIndex];
-          if (pageSize != null) {
-            final img = await _decodeImageFromPixels(
-              data,
-              pageSize[0],
-              pageSize[1],
-            );
-            if (img != null) {
-              pageImages[pageIndex] = img;
-            }
-          }
-        }
-        final pageHeights = Map.of(state.pageOriginalHeights);
-
-        for (int i = 0; i < initResult['pageCount']; i++) {
-          pageHeights[i] =
-              (pageOriginalSizes[i]?[1].toDouble() ?? 0.0) / devicePixelRatio;
-          //   originalMaxWidth =
-          //       max(originalMaxWidth, pageOriginalSizes[i]?[0] ?? 0.0);
-        }
-
-        // print(pageImages.length);
-        state = state.copyWith(
-          filePath: path,
-          fileHash: fileHash,
-          totalPages: initResult['pageCount'],
-          pdfSendPort: _pdfSendPort,
-          docRawPageSizes: pageRawSizesCache,
-          pageOriginalHeights: pageHeights,
-          pageImages: pageImages,
-          originalPagesMaxWidth: originalMaxWidth,
-          isLoading: false,
-          outline: outline,
-        );
-
-        onPageSizeChanged();
-
-        // print('PDF 初始化成功，页数：${state.totalPages}，原始最大宽度：${state.originalMaxWidth}');
-        _enqueueHighResRender(devicePixelRatio);
-        // print('PDF 初始化成功，页数：${state.totalPages}，原始最大宽度：${state.originalMaxWidth}');
-        // print(" PDF 页面渲染完成");
-      } else {
-        state = state.copyWith(errorMessage: initResult['error'] as String);
-      }
-    } catch (e) {
-      state = state.copyWith(errorMessage: '加载 PDF 异常：$e');
-    }
-  }
+  // ─── UI 辅助 ──────────────────────────────────────────────────────────
 
   void clearError() {
     state = state.copyWith(clearErrorMessage: true);
-  }
-
-  void closePdf() {
-    _closePdf();
-    state = const PdfReaderState();
   }
 
   void showPageIndicator() {
@@ -742,8 +741,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   void jumpToPage(int page, ScrollController scrollController) {
     if (!scrollController.hasClients) return;
-    // const double topPadding = .0;
-    // const double separatorHeight = 10.0;
     final double gapsHeightAboveCursor =
         (state.accumulatedScaledPageHeights[page]?.toDouble() ?? 0.0);
 
@@ -752,32 +749,9 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeInOut,
     );
-    // toggleOutlinePanel();
   }
 
-  void _closePdf() {
-    if (state.fileHash == null) return;
-    _pdfReceivePort?.close();
-    _pdfIsolate?.kill(priority: Isolate.immediate);
-    _pdfIsolate = null;
-    _pdfSendPort = null;
-
-    for (final image in state.pageImages.values) {
-      image.dispose();
-    }
-    for (final image in state.highResPageImages.values) {
-      image.dispose();
-    }
-    _highResRenderQueue.clear();
-    _isRenderingHighRes = false;
-    _currentlyRenderingPage = null;
-    state = state.copyWith(
-      pageImages: {},
-      highResPageImages: {},
-      totalPages: 0,
-      outline: [],
-    );
-  }
+  // ─── 内部渲染 / Isolate ──────────────────────────────────────────────
 
   Future<Map<String, dynamic>?> _renderPage(
     int pageIndex, {
@@ -802,15 +776,15 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
     Map<int, List<int>>? pageOriginalSizes;
     final doc = PdfDocument();
-    // childReceivePort.t
+
     childReceivePort.listen((message) {
       final String type = message['type'];
       final SendPort replyPort = message['replyPort'];
 
       if (type == 'init') {
         final Map<int, Uint8List> renderedPixedMap = {};
-        // final Uint8List bytes = message['pdfBytes'];
         final path = message['path'] as String;
+        final bool skipRender = message['skipRender'] == true;
         int originalMaxWidth = 0;
         if (doc.isOpen) doc.dispose();
 
@@ -834,7 +808,9 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
             originalMaxWidth,
             pageOriginalSizes![i]?[0] ?? 0,
           );
-          renderedPixedMap[i] = page.pixels;
+          if (!skipRender) {
+            renderedPixedMap[i] = page.pixels;
+          }
         }
         replyPort.send({
           'success': true,
@@ -865,16 +841,167 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           'width': bitmap.width,
           'height': bitmap.height,
         });
-
-        // bitmap
-
-        // pdfiumBindings.FPDFBitmap_Destroy(bitmap);
-        // pdfiumBindings.FPDF_ClosePage(page);
       }
     });
   }
 }
 
-final pdfReaderProvider = NotifierProvider<PdfReaderNotifier, PdfReaderState>(
-  PdfReaderNotifier.new,
+/// 工作区状态
+class WorkspaceState {
+  final List<TabInfo> openTabs;
+  final String? activeTabId;
+
+  const WorkspaceState({this.openTabs = const [], this.activeTabId});
+
+  WorkspaceState copyWith({
+    List<TabInfo>? openTabs,
+    String? activeTabId,
+    bool clearActiveTabId = false,
+  }) {
+    return WorkspaceState(
+      openTabs: openTabs ?? this.openTabs,
+      activeTabId:
+          clearActiveTabId ? null : (activeTabId ?? this.activeTabId),
+    );
+  }
+}
+
+/// 工作区 Notifier
+class WorkspaceNotifier extends Notifier<WorkspaceState> {
+  @override
+  WorkspaceState build() {
+    ref.onDispose(() {
+      HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    });
+    return const WorkspaceState();
+  }
+
+  void initialize() {
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+  }
+
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+  }
+
+  Future<void> openPdf(double devicePixelRatio) async {
+    try {
+      FilePickerResult? result = await FilePicker.pickFiles(type: FileType.any);
+      if (result == null || result.files.single.path == null) return;
+
+      final path = result.files.single.path!;
+      if (!path.toLowerCase().endsWith('.pdf')) return;
+
+      final bytes = await File(path).readAsBytes();
+      final fileHash = md5.convert(bytes).toString();
+
+      final existingIndex = state.openTabs.indexWhere(
+        (t) => t.fileHash == fileHash,
+      );
+      if (existingIndex != -1) {
+        switchToTab(fileHash);
+        return;
+      }
+
+      final fileName = path.split(Platform.pathSeparator).last;
+
+      final newTab = TabInfo(
+        fileHash: fileHash,
+        filePath: path,
+        fileName: fileName,
+      );
+
+      final wasActive = state.activeTabId;
+      if (wasActive != null) {
+        ref.read(pdfReaderProvider(wasActive).notifier).suspend();
+      }
+
+      state = state.copyWith(
+        openTabs: [...state.openTabs, newTab],
+        activeTabId: fileHash,
+      );
+
+      await ref.read(pdfReaderProvider(fileHash).notifier).fullInit(
+        path,
+        devicePixelRatio,
+      );
+    } catch (_) {}
+  }
+
+  void switchToTab(String fileHash) {
+    if (state.activeTabId == fileHash) return;
+    if (!state.openTabs.any((t) => t.fileHash == fileHash)) return;
+
+    final oldTabId = state.activeTabId;
+    if (oldTabId != null) {
+      ref.read(pdfReaderProvider(oldTabId).notifier).suspend();
+    }
+
+    state = state.copyWith(activeTabId: fileHash);
+
+    final tab = state.openTabs.firstWhere((t) => t.fileHash == fileHash);
+    ref.read(pdfReaderProvider(fileHash).notifier).resume(
+      tab.filePath,
+      1.0, // dpr will be updated on first scroll/layout
+    );
+  }
+
+  void closeTab(String fileHash) {
+    ref.read(pdfReaderProvider(fileHash).notifier).fullDispose();
+
+    final newTabs = state.openTabs.where((t) => t.fileHash != fileHash).toList();
+
+    String? newActiveId;
+    if (state.activeTabId == fileHash) {
+      if (newTabs.isNotEmpty) {
+        final closedIndex = state.openTabs.indexWhere(
+          (t) => t.fileHash == fileHash,
+        );
+        final newIndex = closedIndex < newTabs.length ? closedIndex : newTabs.length - 1;
+        newActiveId = newTabs[newIndex].fileHash;
+      }
+    } else {
+      newActiveId = state.activeTabId;
+    }
+
+    state = state.copyWith(
+      openTabs: newTabs,
+      activeTabId: newActiveId,
+      clearActiveTabId: newActiveId == null,
+    );
+
+    if (newActiveId != null && newActiveId != fileHash) {
+      final tab = state.openTabs.firstWhere((t) => t.fileHash == newActiveId);
+      ref.read(pdfReaderProvider(newActiveId).notifier).resume(
+        tab.filePath,
+        1.0,
+      );
+    }
+  }
+
+  bool _handleKeyEvent(KeyEvent event) {
+    final isCtrl = HardwareKeyboard.instance.logicalKeysPressed.any(
+      (key) =>
+          key == LogicalKeyboardKey.controlLeft ||
+          key == LogicalKeyboardKey.controlRight ||
+          key == LogicalKeyboardKey.metaLeft ||
+          key == LogicalKeyboardKey.metaRight,
+    );
+
+    final activeTabId = state.activeTabId;
+    if (activeTabId != null) {
+      ref.read(pdfReaderProvider(activeTabId).notifier).onCtrlPressed(isCtrl);
+    }
+    return false;
+  }
+}
+
+// ─── Provider 声明 ──────────────────────────────────────────────────────
+
+final pdfReaderProvider =
+    NotifierProvider.family<PdfReaderNotifier, PdfReaderState, String>(
+  (fileHash) => PdfReaderNotifier(fileHash),
 );
+
+final workspaceProvider =
+    NotifierProvider<WorkspaceNotifier, WorkspaceState>(WorkspaceNotifier.new);

@@ -4,7 +4,7 @@ import '../constants/app_colors.dart';
 import '../providers/pdf_reader_provider.dart';
 
 class NewDocumentCard extends HookWidget {
-  final PdfReaderNotifier notifier;
+  final WorkspaceNotifier notifier;
 
   const NewDocumentCard({super.key, required this.notifier});
 
@@ -18,7 +18,7 @@ class NewDocumentCard extends HookWidget {
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: () async =>
-            await notifier.pickPdf(View.of(context).devicePixelRatio),
+            await notifier.openPdf(View.of(context).devicePixelRatio),
         
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),

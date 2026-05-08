@@ -5,7 +5,7 @@ import '../constants/mock_data.dart';
 import '../providers/pdf_reader_provider.dart';
 
 class HistoryDocumentCard extends HookWidget {
-  final PdfReaderNotifier notifier;
+  final WorkspaceNotifier notifier;
   final HistoryItem doc;
 
   const HistoryDocumentCard({super.key, required this.notifier, required this.doc});
@@ -19,7 +19,7 @@ class HistoryDocumentCard extends HookWidget {
       onExit: (_) => isHovered.value = false,
       child: GestureDetector(
         onTap: () async =>
-            await notifier.pickPdf(View.of(context).devicePixelRatio),
+            await notifier.openPdf(View.of(context).devicePixelRatio),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           width: 260,

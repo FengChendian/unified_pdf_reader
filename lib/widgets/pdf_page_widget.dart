@@ -12,24 +12,32 @@ class PdfPageWidget extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final devicePixelRatio = View.of(context).devicePixelRatio;
 
-    final pageSizes = ref.watch(
-      pdfReaderProvider.select(
-        (state) => state.docRawPageSizes[state.fileHash]?[pageIndex],
-      ),
-    );
+    final activeTabId = ref.watch(workspaceProvider.select((s) => s.activeTabId));
+
+    final pageSizes = activeTabId != null
+        ? ref.watch(
+            pdfReaderProvider(activeTabId).select(
+              (state) => state.docRawPageSizes[state.fileHash]?[pageIndex],
+            ),
+          )
+        : null;
     final originalWidth = pageSizes?[0] ?? 0;
     final originalHeight = pageSizes?[1] ?? 0;
 
-    final pageImage = ref.watch(
-      pdfReaderProvider.select(
-        (state) =>
-            state.highResPageImages[pageIndex] ?? state.pageImages[pageIndex],
-      ),
-    );
+    final pageImage = activeTabId != null
+        ? ref.watch(
+            pdfReaderProvider(activeTabId).select(
+              (state) =>
+                  state.highResPageImages[pageIndex] ?? state.pageImages[pageIndex],
+            ),
+          )
+        : null;
 
-    final scale = ref.watch(
-      pdfReaderProvider.select((state) => state.globalScale),
-    );
+    final scale = activeTabId != null
+        ? ref.watch(
+            pdfReaderProvider(activeTabId).select((state) => state.globalScale),
+          )
+        : 1.0;
 
     return _buildPageContent(
       originalWidth,

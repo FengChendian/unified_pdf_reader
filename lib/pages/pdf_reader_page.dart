@@ -22,54 +22,70 @@ class PdfReaderPage extends HookConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final filePath = ref.watch(
-      pdfReaderProvider.select((state) => state.filePath),
+    final workspaceNotifier = ref.read(workspaceProvider.notifier);
+    final activeTabId = ref.watch(
+      workspaceProvider.select((state) => state.activeTabId),
     );
-    final notifier = ref.read(pdfReaderProvider.notifier);
-
     final currentView = useState<String>('home');
 
     useEffect(() {
-      notifier.initialize();
-      return () => notifier.dispose();
-    }, [notifier]);
+      workspaceNotifier.initialize();
+      return () => workspaceNotifier.dispose();
+    }, [workspaceNotifier]);
 
-    // Switch to document view when a file is picked
+    // Switch between home and document view
     useEffect(() {
-      if (filePath != null) {
+      if (activeTabId != null) {
         currentView.value = 'document';
       } else {
         currentView.value = 'home';
       }
       return null;
-    }, [filePath]);
+    }, [activeTabId]);
 
     final scrollController = useScrollController();
     final horizontalScrollController = useScrollController();
 
+    // Scroll listener: delegates to active doc's onScrollChanged
     useEffect(() {
       void listener() async {
-        await notifier.onScrollChanged(
-          scrollController,
-          View.of(context).devicePixelRatio,
+        final id = ref.read(
+          workspaceProvider.select((s) => s.activeTabId),
         );
+        if (id != null) {
+          await ref.read(pdfReaderProvider(id).notifier).onScrollChanged(
+            scrollController,
+            View.of(context).devicePixelRatio,
+          );
+        }
       }
 
       scrollController.addListener(listener);
       return () => scrollController.removeListener(listener);
     }, [scrollController]);
 
-    final outline = ref.watch(
-      pdfReaderProvider.select((state) => state.outline),
-    );
-    final isOutlinePanelOpen = ref.watch(
-      pdfReaderProvider.select((state) => state.isOutlinePanelOpen),
-    );
-    final isLoading = ref.watch(
-      pdfReaderProvider.select((state) => state.isLoading),
-    );
+    final filePath = activeTabId != null
+        ? ref.watch(
+            pdfReaderProvider(activeTabId).select((s) => s.filePath),
+          )
+        : null;
+    final isLoading = activeTabId != null
+        ? ref.watch(
+            pdfReaderProvider(activeTabId).select((s) => s.isLoading),
+          )
+        : false;
+    final outline = activeTabId != null
+        ? ref.watch(
+            pdfReaderProvider(activeTabId).select((s) => s.outline),
+          )
+        : <OutlineItem>[];
+    final isOutlinePanelOpen = activeTabId != null
+        ? ref.watch(
+            pdfReaderProvider(activeTabId).select((s) => s.isOutlinePanelOpen),
+          )
+        : false;
 
-    final isDocumentView = currentView.value == 'document' && filePath != null;
+    final isDocumentView = currentView.value == 'document' && activeTabId != null;
 
     Widget mainContent;
     if (isLoading) {
@@ -78,7 +94,7 @@ class PdfReaderPage extends HookConsumerWidget {
       mainContent = _buildDocumentView(
         context,
         ref,
-        notifier,
+        activeTabId,
         scrollController,
         horizontalScrollController,
         outline,
@@ -86,26 +102,22 @@ class PdfReaderPage extends HookConsumerWidget {
         filePath,
       );
     } else {
-      mainContent = _buildHomePage(context, notifier);
+      mainContent = _buildHomePage(context, workspaceNotifier);
     }
 
     return Scaffold(
       backgroundColor: bgColor,
       body: Row(
         children: [
-          // Left sidebar
-          _buildSidebar(context, currentView, notifier),
-          // Main content area
+          _buildSidebar(context, currentView, workspaceNotifier),
           Expanded(
             child: Column(
               children: [
-                _buildHeader(context, filePath, notifier),
+                _buildHeader(context, ref, workspaceNotifier, scrollController),
                 Expanded(child: mainContent),
               ],
             ),
           ),
-          // Right mini panel (document view only)
-          // if (isDocumentView) _buildRightMiniPanel(),
         ],
       ),
     );
@@ -145,7 +157,7 @@ class PdfReaderPage extends HookConsumerWidget {
   Widget _buildSidebar(
     BuildContext context,
     ValueNotifier<String> currentView,
-    PdfReaderNotifier notifier,
+    WorkspaceNotifier workspaceNotifier,
   ) {
     return Container(
       width: 64,
@@ -156,7 +168,6 @@ class PdfReaderPage extends HookConsumerWidget {
       child: Column(
         children: [
           const SizedBox(height: 20),
-          // App icon
           Container(
             width: 40,
             height: 40,
@@ -174,7 +185,6 @@ class PdfReaderPage extends HookConsumerWidget {
             child: const Icon(Icons.picture_as_pdf, color: white, size: 22),
           ),
           const SizedBox(height: 32),
-          // History / Home button
           SidebarButton(
             icon: Icons.history,
             tooltip: '历史记录',
@@ -182,24 +192,21 @@ class PdfReaderPage extends HookConsumerWidget {
             onTap: () => currentView.value = 'home',
           ),
           const SizedBox(height: 4),
-          // Folder open button
           SidebarButton(
             icon: Icons.folder_open,
             tooltip: '打开文件',
             isActive: false,
             onTap: () async =>
-                await notifier.pickPdf(View.of(context).devicePixelRatio),
+                await workspaceNotifier.openPdf(View.of(context).devicePixelRatio),
           ),
           const SizedBox(height: 16),
-          // Divider
           Container(width: 32, height: 1, color: const Color(0xFFE2E8F0)),
           const SizedBox(height: 16),
-          // Settings button
           SidebarButton(
             icon: Icons.settings_outlined,
             tooltip: '设置',
             isActive: false,
-            onTap: () {}, // No backend
+            onTap: () {},
           ),
         ],
       ),
@@ -208,11 +215,14 @@ class PdfReaderPage extends HookConsumerWidget {
 
   // ─── Header / Tab Bar ──────────────────────────────────────────────────
 
-  Widget _buildHeader(
-    BuildContext context,
-    String? filePath,
-    PdfReaderNotifier notifier,
-  ) {
+  Widget _buildHeader(BuildContext context, WidgetRef ref, WorkspaceNotifier workspaceNotifier, ScrollController scrollController) {
+    final openTabs = ref.watch(
+      workspaceProvider.select((state) => state.openTabs),
+    );
+    final activeTabId = ref.watch(
+      workspaceProvider.select((state) => state.activeTabId),
+    );
+
     return GestureDetector(
       onPanStart: (details) => windowManager.startDragging(),
       child: Container(
@@ -223,16 +233,26 @@ class PdfReaderPage extends HookConsumerWidget {
         ),
         child: Row(
           children: [
-            if (filePath != null) ...[
-              // Document tab + add button
+            if (openTabs.isNotEmpty) ...[
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.only(left: 12, top: 6),
                   child: Row(
                     children: [
-                      _buildTab(filePath, notifier),
+                      ...openTabs.map(
+                        (tab) => _buildTab(
+                          tab,
+                          isActive: tab.fileHash == activeTabId,
+                          onTap: () {
+                            _switchToTab(ref, tab.fileHash, scrollController);
+                          },
+                          onClose: () {
+                            workspaceNotifier.closeTab(tab.fileHash);
+                          },
+                        ),
+                      ),
                       const SizedBox(width: 4),
-                      _buildAddTabButton(context, notifier),
+                      _buildAddTabButton(context, workspaceNotifier),
                     ],
                   ),
                 ),
@@ -251,7 +271,6 @@ class PdfReaderPage extends HookConsumerWidget {
               ),
               const Spacer(),
             ],
-            // Window caption buttons
             WindowCaptionButton.minimize(
               onPressed: () => windowManager.minimize(),
             ),
@@ -271,17 +290,30 @@ class PdfReaderPage extends HookConsumerWidget {
     );
   }
 
-  Widget _buildTab(String filePath, PdfReaderNotifier notifier) {
-    return DocumentTab(filePath: filePath, notifier: notifier);
+  Widget _buildTab(
+    TabInfo tab, {
+    required bool isActive,
+    required VoidCallback onTap,
+    required VoidCallback onClose,
+  }) {
+    return DocumentTab(
+      fileName: tab.fileName,
+      isActive: isActive,
+      onTap: onTap,
+      onClose: onClose,
+    );
   }
 
-  Widget _buildAddTabButton(BuildContext context, PdfReaderNotifier notifier) {
+  Widget _buildAddTabButton(
+    BuildContext context,
+    WorkspaceNotifier workspaceNotifier,
+  ) {
     return Tooltip(
       message: '新建文档',
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
         onTap: () async =>
-            await notifier.pickPdf(View.of(context).devicePixelRatio),
+            await workspaceNotifier.openPdf(View.of(context).devicePixelRatio),
         child: Container(
           width: 32,
           height: 32,
@@ -292,9 +324,30 @@ class PdfReaderPage extends HookConsumerWidget {
     );
   }
 
+  void _switchToTab(WidgetRef ref, String fileHash, ScrollController scrollController) {
+    final activeTabId = ref.read(workspaceProvider.select((s) => s.activeTabId));
+    if (activeTabId == fileHash) return;
+
+    // Save scroll offset of current tab
+    if (activeTabId != null && scrollController.hasClients) {
+      ref.read(pdfReaderProvider(activeTabId).notifier)
+          .saveScrollOffset(scrollController.offset);
+    }
+
+    ref.read(workspaceProvider.notifier).switchToTab(fileHash);
+
+    // Restore scroll offset of new tab
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final saved = ref.read(pdfReaderProvider(fileHash)).savedScrollOffset;
+      if (saved > 0 && scrollController.hasClients) {
+        scrollController.jumpTo(saved);
+      }
+    });
+  }
+
   // ─── Home Page ─────────────────────────────────────────────────────────
 
-  Widget _buildHomePage(BuildContext context, PdfReaderNotifier notifier) {
+  Widget _buildHomePage(BuildContext context, WorkspaceNotifier workspaceNotifier) {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 40),
       child: Center(
@@ -304,7 +357,7 @@ class PdfReaderPage extends HookConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Padding(
-                padding: EdgeInsets.only(left: 10), // 2 + 8
+                padding: EdgeInsets.only(left: 10),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
@@ -326,7 +379,6 @@ class PdfReaderPage extends HookConsumerWidget {
                 ),
               ),
               const SizedBox(height: 36),
-              // Card grid
               LayoutBuilder(
                 builder: (context, constraints) {
                   const cardHeight = 290.0;
@@ -336,13 +388,13 @@ class PdfReaderPage extends HookConsumerWidget {
                     children: [
                       SizedBox(
                         height: cardHeight,
-                        child: _buildNewDocumentCard(notifier),
+                        child: _buildNewDocumentCard(workspaceNotifier),
                       ),
                       ...mockHistory.map(
                         (doc) => SizedBox(
                           height: cardHeight,
                           child: HistoryDocumentCard(
-                            notifier: notifier,
+                            notifier: workspaceNotifier,
                             doc: doc,
                           ),
                         ),
@@ -358,8 +410,8 @@ class PdfReaderPage extends HookConsumerWidget {
     );
   }
 
-  Widget _buildNewDocumentCard(PdfReaderNotifier notifier) {
-    return NewDocumentCard(notifier: notifier);
+  Widget _buildNewDocumentCard(WorkspaceNotifier workspaceNotifier) {
+    return NewDocumentCard(notifier: workspaceNotifier);
   }
 
   // ─── Document View ─────────────────────────────────────────────────────
@@ -367,7 +419,7 @@ class PdfReaderPage extends HookConsumerWidget {
   Widget _buildDocumentView(
     BuildContext context,
     WidgetRef ref,
-    PdfReaderNotifier notifier,
+    String activeTabId,
     ScrollController scrollController,
     ScrollController horizontalScrollController,
     List<OutlineItem> outline,
@@ -379,7 +431,7 @@ class PdfReaderPage extends HookConsumerWidget {
         _buildToolbar(
           context,
           ref,
-          notifier,
+          activeTabId,
           scrollController,
           horizontalScrollController,
           outline,
@@ -391,14 +443,18 @@ class PdfReaderPage extends HookConsumerWidget {
               _buildBody(
                 context,
                 ref,
-                notifier,
+                activeTabId,
                 scrollController,
                 horizontalScrollController,
               ),
               if (outline.isNotEmpty && isOutlinePanelOpen)
-                _buildOutlinePanel(context, ref, notifier, scrollController),
+                _buildOutlinePanel(context, ref, activeTabId, scrollController),
               if (filePath != null)
-                const Positioned(right: 16, bottom: 16, child: PageIndicator()),
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: PageIndicator(activeTabId: activeTabId),
+                ),
               Positioned(
                 right: 0,
                 top: 0,
@@ -417,25 +473,27 @@ class PdfReaderPage extends HookConsumerWidget {
     );
   }
 
-  // ─── Toolbar (redesigned) ──────────────────────────────────────────────
+  // ─── Toolbar ────────────────────────────────────────────────────────────
 
   Widget _buildToolbar(
     BuildContext context,
     WidgetRef ref,
-    PdfReaderNotifier notifier,
+    String activeTabId,
     ScrollController scrollController,
     ScrollController horizontalScrollController,
     List<OutlineItem> outline,
     bool isOutlinePanelOpen,
   ) {
+    final notifier = ref.read(pdfReaderProvider(activeTabId).notifier);
+
     final currentPage = ref.watch(
-      pdfReaderProvider.select((state) => state.currentPage),
+      pdfReaderProvider(activeTabId).select((state) => state.currentPage),
     );
     final totalPages = ref.watch(
-      pdfReaderProvider.select((state) => state.totalPages),
+      pdfReaderProvider(activeTabId).select((state) => state.totalPages),
     );
     final globalScale = ref.watch(
-      pdfReaderProvider.select((state) => state.globalScale),
+      pdfReaderProvider(activeTabId).select((state) => state.globalScale),
     );
 
     return Container(
@@ -447,7 +505,6 @@ class PdfReaderPage extends HookConsumerWidget {
       ),
       child: Row(
         children: [
-          // Left: sidebar toggle + page nav
           if (outline.isNotEmpty)
             _toolbarIconButton(
               icon: Icons.toc,
@@ -488,7 +545,6 @@ class PdfReaderPage extends HookConsumerWidget {
 
           const Spacer(),
 
-          // Center: zoom controls
           _toolbarIconButton(
             icon: Icons.zoom_out,
             tooltip: '缩小',
@@ -522,27 +578,26 @@ class PdfReaderPage extends HookConsumerWidget {
           _toolbarIconButton(
             icon: Icons.dashboard_outlined,
             tooltip: '布局',
-            onTap: () {}, // Placeholder
+            onTap: () {},
           ),
 
           const Spacer(),
 
-          // Right: action buttons
           _toolbarActionButton(
             icon: Icons.edit_outlined,
             label: '编辑',
-            onTap: () {}, // No backend
+            onTap: () {},
           ),
           const SizedBox(width: 4),
           _toolbarIconButton(
             icon: Icons.bookmark_outline,
             tooltip: '书签',
-            onTap: () {}, // No backend
+            onTap: () {},
           ),
           _toolbarIconButton(
             icon: Icons.share_outlined,
             tooltip: '分享',
-            onTap: () {}, // No backend
+            onTap: () {},
           ),
         ],
       ),
@@ -618,76 +673,40 @@ class PdfReaderPage extends HookConsumerWidget {
     );
   }
 
-  // ─── Right Mini Panel ──────────────────────────────────────────────────
-
-  Widget _buildRightMiniPanel() {
-    return Container(
-      width: 48,
-      decoration: const BoxDecoration(
-        color: white,
-        border: Border(left: BorderSide(color: borderColor)),
-      ),
-      child: Column(
-        children: [
-          const SizedBox(height: 12),
-          InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: () {}, // No backend
-            child: Container(
-              width: 32,
-              height: 32,
-              alignment: Alignment.center,
-              child: const Icon(Icons.menu, size: 18, color: textSecondary),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Container(width: 24, height: 1, color: const Color(0xFFE2E8F0)),
-          const SizedBox(height: 16),
-          Container(
-            width: 8,
-            height: 8,
-            decoration: const BoxDecoration(
-              color: Color(0xFF22C55E),
-              shape: BoxShape.circle,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ─── Body (PDF content) — UNCHANGED ────────────────────────────────────
+  // ─── Body (PDF content) ─────────────────────────────────────────────────
 
   Widget _buildBody(
     BuildContext context,
     WidgetRef ref,
-    PdfReaderNotifier notifier,
+    String activeTabId,
     ScrollController scrollController,
     ScrollController horizontalScrollController,
   ) {
+    final notifier = ref.read(pdfReaderProvider(activeTabId).notifier);
+
     final errorMessage = ref.watch(
-      pdfReaderProvider.select((state) => state.errorMessage),
+      pdfReaderProvider(activeTabId).select((state) => state.errorMessage),
     );
     final pdfSendPort = ref.watch(
-      pdfReaderProvider.select((state) => state.pdfSendPort),
+      pdfReaderProvider(activeTabId).select((state) => state.pdfSendPort),
     );
     final originalPagesMaxWidth = ref.watch(
-      pdfReaderProvider.select((state) => state.originalPagesMaxWidth),
+      pdfReaderProvider(activeTabId).select((state) => state.originalPagesMaxWidth),
     );
     final globalScale = ref.watch(
-      pdfReaderProvider.select((state) => state.globalScale),
+      pdfReaderProvider(activeTabId).select((state) => state.globalScale),
     );
     final isCtrlPressed = ref.watch(
-      pdfReaderProvider.select((state) => state.isCtrlPressed),
+      pdfReaderProvider(activeTabId).select((state) => state.isCtrlPressed),
     );
     final totalPages = ref.watch(
-      pdfReaderProvider.select((state) => state.totalPages),
+      pdfReaderProvider(activeTabId).select((state) => state.totalPages),
     );
     final fileHash = ref.watch(
-      pdfReaderProvider.select((state) => state.fileHash),
+      pdfReaderProvider(activeTabId).select((state) => state.fileHash),
     );
     final pageHeights = ref.watch(
-      pdfReaderProvider.select((state) => state.pageOriginalHeights),
+      pdfReaderProvider(activeTabId).select((state) => state.pageOriginalHeights),
     );
 
     if (errorMessage != null) {
@@ -798,19 +817,21 @@ class PdfReaderPage extends HookConsumerWidget {
     );
   }
 
-  // ─── Outline Panel — UNCHANGED ─────────────────────────────────────────
+  // ─── Outline Panel ──────────────────────────────────────────────────────
 
   Widget _buildOutlinePanel(
     BuildContext context,
     WidgetRef ref,
-    PdfReaderNotifier notifier,
+    String activeTabId,
     ScrollController scrollController,
   ) {
+    final notifier = ref.read(pdfReaderProvider(activeTabId).notifier);
+
     final outline = ref.watch(
-      pdfReaderProvider.select((state) => state.outline),
+      pdfReaderProvider(activeTabId).select((state) => state.outline),
     );
     final expandedIds = ref.watch(
-      pdfReaderProvider.select((state) => state.expandedOutlineIds),
+      pdfReaderProvider(activeTabId).select((state) => state.expandedOutlineIds),
     );
 
     return Positioned(

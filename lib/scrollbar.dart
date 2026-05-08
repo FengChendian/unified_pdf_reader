@@ -38,34 +38,36 @@ class CustomScrollbarNotifier extends Notifier<CustomScrollbarState> {
 
   @override
   CustomScrollbarState build() {
-    ref.listen<double>(
-      pdfReaderProvider.select((s) => s.maxScaledPageSumHeight),
-      (previous, next) {
-        WidgetsBinding.instance.addPostFrameCallback((_) => _updateThumb());
-      },
-    );
+    // Listen to workspace changes to recalc thumb on tab switch
+    ref.listen(workspaceProvider, (prev, next) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => updateThumb());
+    });
 
     return const CustomScrollbarState();
   }
 
   void initialize(ScrollController controller) {
     _controller = controller;
-    controller.addListener(_updateThumb);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _updateThumb());
+    controller.addListener(updateThumb);
+    WidgetsBinding.instance.addPostFrameCallback((_) => updateThumb());
   }
 
   void dispose() {
-    _controller?.removeListener(_updateThumb);
+    _controller?.removeListener(updateThumb);
     _controller = null;
   }
 
-  void _updateThumb() {
+  void updateThumb() {
     final c = _controller;
     if (c == null || !c.hasClients) return;
 
+    final activeTabId = ref.read(workspaceProvider).activeTabId;
+    if (activeTabId == null) return;
+
     final pos = c.position;
     final viewport = pos.viewportDimension;
-    final contentHeight = ref.read(pdfReaderProvider).maxScaledPageSumHeight;
+    final contentHeight =
+        ref.read(pdfReaderProvider(activeTabId)).maxScaledPageSumHeight;
     final maxScroll = math.max(0.0, contentHeight - viewport);
 
     if (contentHeight <= viewport) {
@@ -96,9 +98,13 @@ class CustomScrollbarNotifier extends Notifier<CustomScrollbarState> {
     final c = _controller;
     if (c == null || !c.hasClients) return;
 
+    final activeTabId = ref.read(workspaceProvider).activeTabId;
+    if (activeTabId == null) return;
+
     final pos = c.position;
     final viewport = pos.viewportDimension;
-    final contentHeight = ref.read(pdfReaderProvider).maxScaledPageSumHeight;
+    final contentHeight =
+        ref.read(pdfReaderProvider(activeTabId)).maxScaledPageSumHeight;
     final maxScroll = math.max(0.0, contentHeight - viewport);
     if (maxScroll <= 0) return;
     final ratio = contentHeight / viewport;
@@ -135,10 +141,26 @@ class CustomScrollbar extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(customScrollbarProvider.notifier);
 
+    // Watch activeTabId changes and the active document's content height
+    final activeTabId = ref.watch(workspaceProvider.select((s) => s.activeTabId));
+    final maxContentHeight = activeTabId != null
+        ? ref.watch(
+            pdfReaderProvider(activeTabId)
+                .select((s) => s.maxScaledPageSumHeight),
+          )
+        : 0.0;
+
     useEffect(() {
       notifier.initialize(controller);
       return () => notifier.dispose();
     }, [controller]);
+
+    // Recalc thumb when the active document's content height becomes available
+    // (e.g. after async fullInit completes) or changes (e.g. zoom).
+    useEffect(() {
+      WidgetsBinding.instance.addPostFrameCallback((_) => notifier.updateThumb());
+      return null;
+    }, [maxContentHeight]);
 
     final scrollbarState = ref.watch(customScrollbarProvider);
 

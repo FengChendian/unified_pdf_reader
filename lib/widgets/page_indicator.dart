@@ -3,18 +3,20 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../providers/pdf_reader_provider.dart';
 
 class PageIndicator extends HookConsumerWidget {
-  const PageIndicator({super.key});
+  final String activeTabId;
+
+  const PageIndicator({super.key, required this.activeTabId});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final totalPages = ref.watch(
-      pdfReaderProvider.select((state) => state.totalPages),
+      pdfReaderProvider(activeTabId).select((state) => state.totalPages),
     );
     final isPageIndicatorVisible = ref.watch(
-      pdfReaderProvider.select((state) => state.isPageIndicatorVisible),
+      pdfReaderProvider(activeTabId).select((state) => state.isPageIndicatorVisible),
     );
     final displayedPage = ref.watch(
-      pdfReaderProvider.select((state) => state.displayedPage),
+      pdfReaderProvider(activeTabId).select((state) => state.displayedPage),
     );
     return AnimatedOpacity(
       opacity: isPageIndicatorVisible ? 1.0 : 0.0,
