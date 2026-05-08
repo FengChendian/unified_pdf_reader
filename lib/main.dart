@@ -8,8 +8,24 @@ import 'package:unified_pdf_reader/mupdf/mupdf.dart';
 import 'package:unified_pdf_reader/scrollbar.dart';
 import 'providers/pdf_reader_provider.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:window_manager/window_manager.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Must add this line.
+  await windowManager.ensureInitialized();
+
+  WindowOptions windowOptions = WindowOptions(
+    size: Size(800, 600),
+    center: true,
+    backgroundColor: Colors.transparent,
+    skipTaskbar: false,
+    titleBarStyle: TitleBarStyle.hidden,
+  );
+  windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.show();
+    await windowManager.focus();
+  });
   runApp(ProviderScope(child: PdfReaderApp()));
 }
 
@@ -18,6 +34,7 @@ class PdfReaderApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final VirtualWindowFrameBuilder = VirtualWindowFrameInit();
     return MaterialApp(
       title: 'PDF Studio Pro',
       debugShowCheckedModeBanner: false,
@@ -40,6 +57,7 @@ class PdfReaderApp extends StatelessWidget {
 
         textTheme: GoogleFonts.notoSansScTextTheme(),
       ),
+      builder: (context, child) => VirtualWindowFrameBuilder(context, child),
       home: const PdfReaderPage(),
     );
   }
@@ -354,28 +372,39 @@ class PdfReaderPage extends HookConsumerWidget {
   }
 
   Widget _buildTitleBar(String? filePath) {
-    return Container(
-      height: 36,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.8),
-        border: Border(
-          bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+    return GestureDetector(
+      onPanStart: (details) => windowManager.startDragging(),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.blue[50],
+          // border: Border(
+          //   bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+          // ),
         ),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.picture_as_pdf, size: 18, color: Colors.redAccent),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              filePath?.split('\\').last ?? 'PDF Studio',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-              overflow: TextOverflow.ellipsis,
-            ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.picture_as_pdf,
+                size: 18,
+                color: Colors.redAccent,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  filePath?.split('\\').last ?? 'PDF Studio',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ), // Positioned.fill(child: MoveWindow()),
     );
   }
 
@@ -389,9 +418,9 @@ class PdfReaderPage extends HookConsumerWidget {
     );
 
     return Container(
-      height: 44,
+      height: 40,
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(color: Colors.white),
+      decoration: BoxDecoration(color: Colors.blue[50]),
       child: Row(
         children: [
           if (outline.isNotEmpty)
