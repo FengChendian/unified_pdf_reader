@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -189,7 +190,7 @@ class PdfReaderPage extends HookConsumerWidget {
             icon: Icons.history,
             tooltip: '历史记录',
             isActive: currentView.value == 'home',
-            onTap: () => currentView.value = 'home',
+            onTap: () => workspaceNotifier.goHome(),
           ),
           const SizedBox(height: 4),
           SidebarButton(
@@ -223,6 +224,17 @@ class PdfReaderPage extends HookConsumerWidget {
       workspaceProvider.select((state) => state.activeTabId),
     );
 
+    // useEffect(() {
+    //   final tabCount = openTabs.length;
+    //   if (tabCount == 0) {
+    //     windowManager.setMinimumSize(const Size(600, 600));
+    //   } else {
+    //     final minWidth = tabCount * 52.0 + 600;
+    //     windowManager.setMinimumSize(Size(minWidth, 600));
+    //   }
+    //   return null;
+    // }, [openTabs.length]);
+
     return GestureDetector(
       onPanStart: (details) => windowManager.startDragging(),
       child: Container(
@@ -239,16 +251,14 @@ class PdfReaderPage extends HookConsumerWidget {
                   padding: const EdgeInsets.only(left: 12, top: 6),
                   child: Row(
                     children: [
-                      ...openTabs.map(
-                        (tab) => _buildTab(
-                          tab,
-                          isActive: tab.fileHash == activeTabId,
-                          onTap: () {
-                            _switchToTab(ref, tab.fileHash, scrollController);
-                          },
-                          onClose: () {
-                            workspaceNotifier.closeTab(tab.fileHash);
-                          },
+                      Expanded(
+                        child: _buildTabListView(
+                          context,
+                          ref,
+                          workspaceNotifier,
+                          openTabs,
+                          activeTabId,
+                          scrollController,
                         ),
                       ),
                       const SizedBox(width: 4),
@@ -290,17 +300,42 @@ class PdfReaderPage extends HookConsumerWidget {
     );
   }
 
-  Widget _buildTab(
-    TabInfo tab, {
-    required bool isActive,
-    required VoidCallback onTap,
-    required VoidCallback onClose,
-  }) {
-    return DocumentTab(
-      fileName: tab.fileName,
-      isActive: isActive,
-      onTap: onTap,
-      onClose: onClose,
+  Widget _buildTabListView(
+    BuildContext context,
+    WidgetRef ref,
+    WorkspaceNotifier workspaceNotifier,
+    List<TabInfo> openTabs,
+    String? activeTabId,
+    ScrollController scrollController,
+  ) {
+    final tabScrollController = useScrollController();
+    final tabWidth = (200.0 - (openTabs.length - 1) * 10).clamp(100.0, 200.0);
+
+    return Listener(
+      onPointerSignal: (event) {
+        if (event is PointerScrollEvent && tabScrollController.hasClients) {
+          final newOffset = (tabScrollController.offset + event.scrollDelta.dy)
+              .clamp(0.0, tabScrollController.position.maxScrollExtent);
+          tabScrollController.jumpTo(newOffset);
+        }
+      },
+      child: ListView(
+        controller: tabScrollController,
+        scrollDirection: Axis.horizontal,
+        children: openTabs
+            .map(
+              (tab) => SizedBox(
+                width: tabWidth,
+                child: DocumentTab(
+                  fileName: tab.fileName,
+                  isActive: tab.fileHash == activeTabId,
+                  onTap: () => _switchToTab(ref, tab.fileHash, scrollController),
+                  onClose: () => workspaceNotifier.closeTab(tab.fileHash),
+                ),
+              ),
+            )
+            .toList(),
+      ),
     );
   }
 

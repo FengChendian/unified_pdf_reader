@@ -30,7 +30,6 @@ class DocumentTab extends HookWidget {
           child: Container(
             height: 36,
             padding: const EdgeInsets.symmetric(horizontal: 14),
-            constraints: const BoxConstraints(minWidth: 100, maxWidth: 200),
             decoration: BoxDecoration(
               color: isActive
                   ? const Color.fromARGB(255, 241, 245, 249)

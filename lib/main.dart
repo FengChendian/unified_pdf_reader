@@ -17,6 +17,7 @@ void main() async {
     backgroundColor: Colors.transparent,
     skipTaskbar: false,
     titleBarStyle: TitleBarStyle.hidden,
+    minimumSize: Size(600, 400),
   );
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.show();
@@ -27,7 +28,7 @@ void main() async {
 
 class PdfReaderApp extends StatelessWidget {
   const PdfReaderApp({super.key});
-
+  
   @override
   Widget build(BuildContext context) {
     final virtualWindowFrameBuilder = VirtualWindowFrameInit();

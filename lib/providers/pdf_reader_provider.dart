@@ -179,38 +179,25 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   // ─── 生命周期：首次打开 ────────────────────────────────────────────────
 
   Future<void> fullInit(String path, double devicePixelRatio) async {
-    await _initPdf(path, devicePixelRatio, skipRender: false);
+    await _initPdf(path, devicePixelRatio);
     _startHighResTimer();
     _enqueueHighResRender(devicePixelRatio);
   }
 
-  // ─── 生命周期：切回已打开的文档 ────────────────────────────────────────
+  // ─── 生命周期：切回已打开的文档（isolate 和缓存都还在） ──────────────
 
-  Future<void> resume(String path, double devicePixelRatio) async {
-    await _initPdf(path, devicePixelRatio, skipRender: true);
+  void resume(String path, double devicePixelRatio) {
     _startHighResTimer();
     _enqueueHighResRender(devicePixelRatio);
   }
 
-  // ─── 生命周期：切走（保留缓存） ────────────────────────────────────────
+  // ─── 生命周期：切走（保留 isolate、端口、高低清缓存） ────────────────
 
   void suspend() {
     _stopHighResTimer();
     _highResRenderQueue.clear();
     _isRenderingHighRes = false;
     _currentlyRenderingPage = null;
-    _killIsolate();
-    _pdfReceivePort?.close();
-    _pdfReceivePort = null;
-    _pdfSendPort = null;
-
-    for (final image in state.highResPageImages.values) {
-      image.dispose();
-    }
-    state = state.copyWith(
-      pdfSendPort: null,
-      highResPageImages: {},
-    );
   }
 
   // ─── 生命周期：关闭（全部清理） ────────────────────────────────────────
@@ -244,9 +231,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   Future<void> _initPdf(
     String path,
-    double devicePixelRatio, {
-    required bool skipRender,
-  }) async {
+    double devicePixelRatio,
+  ) async {
     try {
       _killIsolate();
       _pdfReceivePort = ReceivePort();
@@ -266,7 +252,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       _pdfSendPort!.send({
         'type': 'init',
         'path': path,
-        'skipRender': skipRender,
         'replyPort': responsePort.sendPort,
       });
 
@@ -283,26 +268,21 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           fileHash: pageOriginalSizes,
         };
 
-        Map<int, ui.Image> pageImages;
-        if (skipRender) {
-          pageImages = Map.of(state.pageImages);
-        } else {
-          final renderedPixedMap =
-              initResult['renderedPixedMap'] as Map<int, Uint8List>? ?? {};
-          pageImages = <int, ui.Image>{};
-          for (final entry in renderedPixedMap.entries) {
-            final pageIndex = entry.key;
-            final data = entry.value;
-            final pageSize = pageOriginalSizes[pageIndex];
-            if (pageSize != null) {
-              final img = await _decodeImageFromPixels(
-                data,
-                pageSize[0],
-                pageSize[1],
-              );
-              if (img != null) {
-                pageImages[pageIndex] = img;
-              }
+        final renderedPixedMap =
+            initResult['renderedPixedMap'] as Map<int, Uint8List>? ?? {};
+        final pageImages = <int, ui.Image>{};
+        for (final entry in renderedPixedMap.entries) {
+          final pageIndex = entry.key;
+          final data = entry.value;
+          final pageSize = pageOriginalSizes[pageIndex];
+          if (pageSize != null) {
+            final img = await _decodeImageFromPixels(
+              data,
+              pageSize[0],
+              pageSize[1],
+            );
+            if (img != null) {
+              pageImages[pageIndex] = img;
             }
           }
         }
@@ -782,9 +762,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       final SendPort replyPort = message['replyPort'];
 
       if (type == 'init') {
-        final Map<int, Uint8List> renderedPixedMap = {};
+        final renderedPixedMap = <int, Uint8List>{};
         final path = message['path'] as String;
-        final bool skipRender = message['skipRender'] == true;
         int originalMaxWidth = 0;
         if (doc.isOpen) doc.dispose();
 
@@ -808,9 +787,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
             originalMaxWidth,
             pageOriginalSizes![i]?[0] ?? 0,
           );
-          if (!skipRender) {
-            renderedPixedMap[i] = page.pixels;
-          }
+          renderedPixedMap[i] = page.pixels;
         }
         replyPort.send({
           'success': true,
@@ -944,6 +921,13 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
       tab.filePath,
       1.0, // dpr will be updated on first scroll/layout
     );
+  }
+
+  void goHome() {
+    if (state.activeTabId == null) return;
+
+    ref.read(pdfReaderProvider(state.activeTabId!).notifier).suspend();
+    state = state.copyWith(clearActiveTabId: true);
   }
 
   void closeTab(String fileHash) {
