@@ -229,10 +229,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   // ─── 内部 init ─────────────────────────────────────────────────────────
 
-  Future<void> _initPdf(
-    String path,
-    double devicePixelRatio,
-  ) async {
+  Future<void> _initPdf(String path, double devicePixelRatio) async {
     try {
       _killIsolate();
       _pdfReceivePort = ReceivePort();
@@ -377,7 +374,10 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     int newPage = 0;
 
     for (
-      int i = (state.currentPage - 1).clamp(0, _detectionLineHeights.length - 1);
+      int i = (state.currentPage - 1).clamp(
+        0,
+        _detectionLineHeights.length - 1,
+      );
       i < _detectionLineHeights.length - 1;
       i++
     ) {
@@ -584,7 +584,10 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   void adjustZoom(
     double delta,
-    ScrollController scrollController, [
+    ScrollController scrollController,
+    double devicePixelRatio,
+    double screenWidth,
+    double currentPagesMaxWidth, [
     ScrollController? hController,
   ]) {
     final newScale = (state.globalScale + delta).clamp(0.5, 8.0);
@@ -593,22 +596,40 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       _scrollOffset = scrollController.offset;
       _mouseY = scrollController.position.viewportDimension / 2;
     }
+
+    final newPagesMaxWidth =
+        state.originalPagesMaxWidth * newScale / devicePixelRatio;
+    double leftPadding = 0;
+
     if (hController != null && hController.hasClients) {
       _mouseX = hController.position.viewportDimension / 2;
       _horizontalScrollOffset = hController.offset;
+
+      if (currentPagesMaxWidth < screenWidth &&
+          newPagesMaxWidth >= screenWidth) {
+        leftPadding = (screenWidth - currentPagesMaxWidth) / 2;
+      }
     }
-    onScaleChanged(newScale, scrollController);
+    onScaleChanged(
+      newScale,
+      scrollController,
+      hController,
+      devicePixelRatio,
+      newPagesMaxWidth,
+      screenWidth,
+      leftPadding,
+    );
   }
 
   void onScaleChanged(
     double newScale,
-    ScrollController scrollController, [
+    ScrollController scrollController,
     ScrollController? horizontalScrollController,
-    double devicePixelRatio = 1.0,
-    double newPagesMaxWidth = 0,
-    double screenWidth = 0,
-    double leftPadding = 0,
-  ]) {
+    double devicePixelRatio,
+    double newPagesMaxWidth,
+    double screenWidth,
+    double leftPadding,
+  ) {
     state = state.copyWith(globalScale: newScale);
 
     onPageSizeChanged();
@@ -837,8 +858,7 @@ class WorkspaceState {
   }) {
     return WorkspaceState(
       openTabs: openTabs ?? this.openTabs,
-      activeTabId:
-          clearActiveTabId ? null : (activeTabId ?? this.activeTabId),
+      activeTabId: clearActiveTabId ? null : (activeTabId ?? this.activeTabId),
     );
   }
 }
@@ -898,10 +918,9 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
         activeTabId: fileHash,
       );
 
-      await ref.read(pdfReaderProvider(fileHash).notifier).fullInit(
-        path,
-        devicePixelRatio,
-      );
+      await ref
+          .read(pdfReaderProvider(fileHash).notifier)
+          .fullInit(path, devicePixelRatio);
     } catch (_) {}
   }
 
@@ -917,10 +936,12 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
     state = state.copyWith(activeTabId: fileHash);
 
     final tab = state.openTabs.firstWhere((t) => t.fileHash == fileHash);
-    ref.read(pdfReaderProvider(fileHash).notifier).resume(
-      tab.filePath,
-      1.0, // dpr will be updated on first scroll/layout
-    );
+    ref
+        .read(pdfReaderProvider(fileHash).notifier)
+        .resume(
+          tab.filePath,
+          1.0, // dpr will be updated on first scroll/layout
+        );
   }
 
   void goHome() {
@@ -933,7 +954,9 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
   void closeTab(String fileHash) {
     ref.read(pdfReaderProvider(fileHash).notifier).fullDispose();
 
-    final newTabs = state.openTabs.where((t) => t.fileHash != fileHash).toList();
+    final newTabs = state.openTabs
+        .where((t) => t.fileHash != fileHash)
+        .toList();
 
     String? newActiveId;
     if (state.activeTabId == fileHash) {
@@ -941,7 +964,9 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
         final closedIndex = state.openTabs.indexWhere(
           (t) => t.fileHash == fileHash,
         );
-        final newIndex = closedIndex < newTabs.length ? closedIndex : newTabs.length - 1;
+        final newIndex = closedIndex < newTabs.length
+            ? closedIndex
+            : newTabs.length - 1;
         newActiveId = newTabs[newIndex].fileHash;
       }
     } else {
@@ -956,10 +981,9 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
 
     if (newActiveId != null && newActiveId != fileHash) {
       final tab = state.openTabs.firstWhere((t) => t.fileHash == newActiveId);
-      ref.read(pdfReaderProvider(newActiveId).notifier).resume(
-        tab.filePath,
-        1.0,
-      );
+      ref
+          .read(pdfReaderProvider(newActiveId).notifier)
+          .resume(tab.filePath, 1.0);
     }
   }
 
@@ -984,8 +1008,9 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
 
 final pdfReaderProvider =
     NotifierProvider.family<PdfReaderNotifier, PdfReaderState, String>(
-  (fileHash) => PdfReaderNotifier(fileHash),
-);
+      (fileHash) => PdfReaderNotifier(fileHash),
+    );
 
-final workspaceProvider =
-    NotifierProvider<WorkspaceNotifier, WorkspaceState>(WorkspaceNotifier.new);
+final workspaceProvider = NotifierProvider<WorkspaceNotifier, WorkspaceState>(
+  WorkspaceNotifier.new,
+);

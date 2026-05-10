@@ -239,6 +239,7 @@ class PdfReaderPage extends HookConsumerWidget {
       onPanStart: (details) => windowManager.startDragging(),
       child: Container(
         height: 44,
+        padding: const EdgeInsets.only(top: 4),
         decoration: const BoxDecoration(
           color: white,
           border: Border(bottom: BorderSide(color: borderColor)),
@@ -248,11 +249,12 @@ class PdfReaderPage extends HookConsumerWidget {
             if (openTabs.isNotEmpty) ...[
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.only(left: 12, top: 6),
+                  padding: const EdgeInsets.only(left: 4),
                   child: Row(
                     children: [
-                      Expanded(
-                        child: _buildTabListView(
+                      Flexible(
+                        child:
+                        _buildTabListView(
                           context,
                           ref,
                           workspaceNotifier,
@@ -320,6 +322,7 @@ class PdfReaderPage extends HookConsumerWidget {
         }
       },
       child: ListView(
+        shrinkWrap: true,
         controller: tabScrollController,
         scrollDirection: Axis.horizontal,
         children: openTabs
@@ -530,6 +533,13 @@ class PdfReaderPage extends HookConsumerWidget {
     final globalScale = ref.watch(
       pdfReaderProvider(activeTabId).select((state) => state.globalScale),
     );
+    final screenWidth = MediaQuery.of(context).size.width;
+    final devicePixelRatio = View.of(context).devicePixelRatio;
+    final originalPagesMaxWidth = ref.watch(
+      pdfReaderProvider(activeTabId).select((s) => s.originalPagesMaxWidth),
+    );
+    final currentMaxWidth =
+        originalPagesMaxWidth * globalScale / devicePixelRatio;
 
     return Container(
       height: 48,
@@ -586,15 +596,22 @@ class PdfReaderPage extends HookConsumerWidget {
             onTap: () => notifier.adjustZoom(
               -0.1,
               scrollController,
+              devicePixelRatio,
+              screenWidth,
+              currentMaxWidth,
               horizontalScrollController,
             ),
           ),
           Container(
-            width: 56,
-            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF1F5F9),
+              borderRadius: BorderRadius.circular(8),
+            ),
             child: Text(
               '${(globalScale * 100).round()}%',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
             ),
           ),
           _toolbarIconButton(
@@ -603,6 +620,9 @@ class PdfReaderPage extends HookConsumerWidget {
             onTap: () => notifier.adjustZoom(
               0.1,
               scrollController,
+              devicePixelRatio,
+              screenWidth,
+              currentMaxWidth,
               horizontalScrollController,
             ),
           ),

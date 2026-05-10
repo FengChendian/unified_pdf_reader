@@ -29,7 +29,7 @@ class DocumentTab extends HookWidget {
           borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
           child: Container(
             height: 36,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
               color: isActive
                   ? const Color.fromARGB(255, 241, 245, 249)
@@ -42,7 +42,6 @@ class DocumentTab extends HookWidget {
               ),
             ),
             child: Row(
-              mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
                   Icons.picture_as_pdf,
@@ -50,7 +49,7 @@ class DocumentTab extends HookWidget {
                   color: isActive ? accentBlue : textSecondary,
                 ),
                 const SizedBox(width: 8),
-                Flexible(
+                Expanded(
                   child: Text(
                     fileName,
                     style: TextStyle(
@@ -61,24 +60,25 @@ class DocumentTab extends HookWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (isHovered.value) ...[
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: onClose,
-                    child: Container(
-                      width: 18,
-                      height: 18,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.close,
-                        size: 14,
-                        color: textSecondary,
-                      ),
-                    ),
-                  ),
-                ],
+                const SizedBox(width: 8),
+
+                isHovered.value
+                    ? GestureDetector(
+                        onTap: onClose,
+                        child: Container(
+                          width: 18,
+                          height: 18,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.close,
+                            size: 14,
+                            color: textSecondary,
+                          ),
+                        ),
+                      )
+                    : SizedBox(width: 18, height: 18),
               ],
             ),
           ),

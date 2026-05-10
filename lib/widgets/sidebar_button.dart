@@ -39,7 +39,7 @@ class SidebarButton extends HookWidget {
                   ? accentBlueLight
                   : isHovered.value
                   ? const Color(0xFFF1F5F9)
-                  : Colors.transparent,
+                  : Colors.white,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(
