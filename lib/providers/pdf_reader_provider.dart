@@ -446,14 +446,11 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       state.totalPages - 1,
     );
 
-    _highResRenderQueue.removeWhere((p) => p < start || p > end);
+    // _highResRenderQueue.removeWhere((p) => p < start || p > end);
 
-    final inQueue = _highResRenderQueue.toSet();
+    // final inQueue = _highResRenderQueue.toSet();
     final toAdd = <int>[];
     for (int p = start; p <= end; p++) {
-      if (state.highResPageImages.containsKey(p)) continue;
-      if (inQueue.contains(p)) continue;
-      if (p == _currentlyRenderingPage) continue;
       toAdd.add(p);
     }
     toAdd.sort(
@@ -466,9 +463,10 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     final toRemove = state.highResPageImages.keys
         .where((k) => k < start || k > end)
         .toList();
+
     if (toRemove.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (toRemove.isEmpty) return;
+        // if (toRemove.isEmpty) return;
         final newHighRes = Map<int, ui.Image>.of(state.highResPageImages);
         for (final idx in toRemove) {
           newHighRes[idx]?.dispose();
@@ -486,17 +484,26 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     _isRenderingHighRes = true;
     try {
       while (_highResRenderQueue.isNotEmpty) {
-        final int pageIndex = _highResRenderQueue.removeFirst();
-        final int start = (state.currentPage - _highResWindowRadius).clamp(
-          0,
-          state.totalPages - 1,
-        );
-        final int end = (state.currentPage + _highResWindowRadius).clamp(
-          0,
-          state.totalPages - 1,
-        );
-        if (pageIndex < start || pageIndex > end) continue;
+        while (_highResRenderQueue.length >( _highResWindowRadius * 2 + 1)) {
+          // 队列过长时优先渲染当前页附近的页面
+          _highResRenderQueue.removeFirst();
+        }
+        final int pageIndex = _highResRenderQueue.remove(state.currentPage)
+            ? state.currentPage
+            : _highResRenderQueue.removeFirst();
+        // _highResRenderQueu
         if (state.highResPageImages.containsKey(pageIndex)) continue;
+
+        // final int start = (state.currentPage - _highResWindowRadius).clamp(
+        //   0,
+        //   state.totalPages - 1,
+        // );
+        // final int end = (state.currentPage + _highResWindowRadius).clamp(
+        //   0,
+        //   state.totalPages - 1,
+        // );
+        // if (pageIndex < start || pageIndex > end) continue;
+        
 
         _currentlyRenderingPage = pageIndex;
         try {

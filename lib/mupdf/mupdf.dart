@@ -1,3 +1,6 @@
+// FFI 绑定文件：字段名和函数名必须与 C 层保持一致，不使用 lowerCamelCase
+// ignore_for_file: non_constant_identifier_names
+
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -38,6 +41,59 @@ final class MuPdfOutlineJson extends Struct {
 
   @Int32()
   external int length;
+}
+
+/// 矩形结构体映射
+final class MuPdfRect extends Struct {
+  @Float()
+  external double x0;
+
+  @Float()
+  external double y0;
+
+  @Float()
+  external double x1;
+
+  @Float()
+  external double y1;
+}
+
+/// 单个字符结构体映射
+final class MuPdfTextChar extends Struct {
+  external MuPdfRect bbox;
+
+  @Array(5)
+  external Array<Uint8> utf8;
+}
+
+/// 文本行结构体映射
+final class MuPdfTextLine extends Struct {
+  external MuPdfRect bbox;
+
+  @Int32()
+  external int chars_count;
+
+  external Pointer<MuPdfTextChar> chars;
+
+  external Pointer<Utf8> text;
+}
+
+/// 文本块结构体映射
+final class MuPdfTextBlock extends Struct {
+  external MuPdfRect bbox;
+
+  @Int32()
+  external int lines_count;
+
+  external Pointer<MuPdfTextLine> lines;
+}
+
+/// 结构化文本页结构体映射
+final class MuPdfTextPage extends Struct {
+  @Int32()
+  external int blocks_count;
+
+  external Pointer<MuPdfTextBlock> blocks;
 }
 
 // ==========================================
@@ -83,6 +139,13 @@ class MuPdfLibrary {
   )
   docGetOutline;
   late final void Function(Pointer<MuPdfOutlineJson>) outlineFree;
+  late final Pointer<MuPdfTextPage> Function(
+    Pointer<MuPdfContextOpaque>,
+    Pointer<MuPdfDocumentOpaque>,
+    int,
+  )
+  pageGetStext;
+  late final void Function(Pointer<MuPdfTextPage>) stextPageFree;
 
   /// 初始化并加载 DLL。默认从当前 exe 所在根目录加载
   MuPdfLibrary({String dllName = 'mupdf.dll'}) {
@@ -190,6 +253,26 @@ class MuPdfLibrary {
           Void Function(Pointer<MuPdfOutlineJson>),
           void Function(Pointer<MuPdfOutlineJson>)
         >('mupdf_outline_free');
+
+    pageGetStext = _dylib
+        .lookupFunction<
+          Pointer<MuPdfTextPage> Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            Int32,
+          ),
+          Pointer<MuPdfTextPage> Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            int,
+          )
+        >('mupdf_page_get_stext');
+
+    stextPageFree = _dylib
+        .lookupFunction<
+          Void Function(Pointer<MuPdfTextPage>),
+          void Function(Pointer<MuPdfTextPage>)
+        >('mupdf_stext_page_free');
   }
 }
 
@@ -252,6 +335,57 @@ class OutlineItem {
 
   /// 从 JSON 对象创建 OutlineItem
   factory OutlineItem.fromJson(Map<String, dynamic> json) => _parse(json);
+}
+
+/// 矩形
+class PdfRect {
+  final double x0;
+  final double y0;
+  final double x1;
+  final double y1;
+
+  const PdfRect({
+    required this.x0,
+    required this.y0,
+    required this.x1,
+    required this.y1,
+  });
+}
+
+/// 单个字符
+class TextChar {
+  final PdfRect bbox;
+  final String character;
+
+  const TextChar({required this.bbox, required this.character});
+}
+
+/// 文本行
+class TextLine {
+  final PdfRect bbox;
+  final String text;
+  final List<TextChar> chars;
+
+  const TextLine({
+    required this.bbox,
+    required this.text,
+    required this.chars,
+  });
+}
+
+/// 文本块
+class TextBlock {
+  final PdfRect bbox;
+  final List<TextLine> lines;
+
+  const TextBlock({required this.bbox, required this.lines});
+}
+
+/// 结构化文本页
+class StructuredTextPage {
+  final List<TextBlock> blocks;
+
+  const StructuredTextPage({required this.blocks});
 }
 
 /// 独立的 PDF 文档实例，支持多文档同时操作
@@ -331,6 +465,76 @@ class PdfDocument {
     } finally {
       // 释放 C 层的 outline 结构
       _lib.outlineFree(outlinePtr);
+    }
+  }
+
+  /// 提取页面结构化文本
+  /// 返回 StructuredTextPage，包含文本块、行和字符信息
+  StructuredTextPage getStructuredText(int pageNumber) {
+    if (!isOpen) throw Exception("Document is not open.");
+
+    final textPagePtr = _lib.pageGetStext(_ctx, _doc, pageNumber);
+    if (textPagePtr == nullptr) {
+      _throwLastError("Failed to extract text from page $pageNumber");
+    }
+
+    try {
+      final tp = textPagePtr.ref;
+      final blocks = <TextBlock>[];
+
+      for (int bi = 0; bi < tp.blocks_count; bi++) {
+        final cBlock = (tp.blocks + bi).ref;
+        final lines = <TextLine>[];
+
+        for (int li = 0; li < cBlock.lines_count; li++) {
+          final cLine = (cBlock.lines + li).ref;
+          final chars = <TextChar>[];
+
+          for (int ci = 0; ci < cLine.chars_count; ci++) {
+            final cChar = (cLine.chars + ci).ref;
+            final bytes = <int>[];
+            for (int i = 0; i < 5; i++) {
+              final byte = cChar.utf8[i];
+              if (byte == 0) break;
+              bytes.add(byte);
+            }
+            chars.add(TextChar(
+              bbox: PdfRect(
+                x0: cChar.bbox.x0,
+                y0: cChar.bbox.y0,
+                x1: cChar.bbox.x1,
+                y1: cChar.bbox.y1,
+              ),
+              character: utf8.decode(bytes),
+            ));
+          }
+
+          lines.add(TextLine(
+            bbox: PdfRect(
+              x0: cLine.bbox.x0,
+              y0: cLine.bbox.y0,
+              x1: cLine.bbox.x1,
+              y1: cLine.bbox.y1,
+            ),
+            text: cLine.text.toDartString(),
+            chars: chars,
+          ));
+        }
+
+        blocks.add(TextBlock(
+          bbox: PdfRect(
+            x0: cBlock.bbox.x0,
+            y0: cBlock.bbox.y0,
+            x1: cBlock.bbox.x1,
+            y1: cBlock.bbox.y1,
+          ),
+          lines: lines,
+        ));
+      }
+
+      return StructuredTextPage(blocks: blocks);
+    } finally {
+      _lib.stextPageFree(textPagePtr);
     }
   }
 
