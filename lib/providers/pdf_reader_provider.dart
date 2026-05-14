@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:crypto/crypto.dart';
 import 'package:unified_pdf_reader/mupdf/mupdf.dart';
+import '../utils/text_selection.dart';
 
 /// Tab 信息
 class TabInfo {
@@ -49,6 +50,9 @@ class PdfReaderState {
   final bool isOutlinePanelOpen;
   final Set<String> expandedOutlineIds;
   final double savedScrollOffset;
+  final Map<int, StructuredTextPage> stextCache;
+  final bool isSelectionMode;
+  final Map<int, PageTextSelection> pageSelections;
 
   const PdfReaderState({
     this.filePath,
@@ -74,6 +78,9 @@ class PdfReaderState {
     this.isOutlinePanelOpen = false,
     this.expandedOutlineIds = const {},
     this.savedScrollOffset = 0.0,
+    this.stextCache = const {},
+    this.isSelectionMode = false,
+    this.pageSelections = const {},
   });
 
   PdfReaderState copyWith({
@@ -102,6 +109,9 @@ class PdfReaderState {
     bool? isOutlinePanelOpen,
     Set<String>? expandedOutlineIds,
     double? savedScrollOffset,
+    Map<int, StructuredTextPage>? stextCache,
+    bool? isSelectionMode,
+    Map<int, PageTextSelection>? pageSelections,
   }) {
     return PdfReaderState(
       filePath: clearFilePath ? null : (filePath ?? this.filePath),
@@ -133,6 +143,9 @@ class PdfReaderState {
       isOutlinePanelOpen: isOutlinePanelOpen ?? this.isOutlinePanelOpen,
       expandedOutlineIds: expandedOutlineIds ?? this.expandedOutlineIds,
       savedScrollOffset: savedScrollOffset ?? this.savedScrollOffset,
+      stextCache: stextCache ?? this.stextCache,
+      isSelectionMode: isSelectionMode ?? this.isSelectionMode,
+      pageSelections: pageSelections ?? this.pageSelections,
     );
   }
 }
@@ -759,6 +772,221 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     );
   }
 
+  // ─── 文本选择 ──────────────────────────────────────────────────────
+
+  void toggleSelectionMode() {
+    state = state.copyWith(isSelectionMode: !state.isSelectionMode);
+  }
+
+  Future<StructuredTextPage?> _fetchStructuredText(int pageIndex) async {
+    if (state.stextCache.containsKey(pageIndex)) return state.stextCache[pageIndex];
+    if (_pdfSendPort == null) return null;
+
+    final responsePort = ReceivePort();
+    _pdfSendPort!.send({
+      'type': 'getStructuredText',
+      'pageIndex': pageIndex,
+      'replyPort': responsePort.sendPort,
+    });
+    final result = await responsePort.first;
+    responsePort.close();
+
+    if (result['success'] != true) return null;
+
+    final stext = _deserializeStructuredText(result['stext'] as Map<String, dynamic>);
+    state = state.copyWith(stextCache: {...state.stextCache, pageIndex: stext});
+    return stext;
+  }
+
+  static StructuredTextPage _deserializeStructuredText(Map<String, dynamic> map) {
+    final blocks = (map['blocks'] as List).map((b) {
+      final bm = b as Map<String, dynamic>;
+      final bbox = bm['bbox'] as List;
+      final lines = (bm['lines'] as List).map((l) {
+        final lm = l as Map<String, dynamic>;
+        final lbox = lm['bbox'] as List;
+        final chars = (lm['chars'] as List).map((c) {
+          final cm = c as Map<String, dynamic>;
+          final cbox = cm['bbox'] as List;
+          return TextChar(
+            bbox: PdfRect(
+              x0: (cbox[0] as num).toDouble(),
+              y0: (cbox[1] as num).toDouble(),
+              x1: (cbox[2] as num).toDouble(),
+              y1: (cbox[3] as num).toDouble(),
+            ),
+            character: cm['c'] as String,
+          );
+        }).toList();
+        return TextLine(
+          bbox: PdfRect(
+            x0: (lbox[0] as num).toDouble(),
+            y0: (lbox[1] as num).toDouble(),
+            x1: (lbox[2] as num).toDouble(),
+            y1: (lbox[3] as num).toDouble(),
+          ),
+          text: lm['text'] as String,
+          chars: chars,
+        );
+      }).toList();
+      return TextBlock(
+        bbox: PdfRect(
+          x0: (bbox[0] as num).toDouble(),
+          y0: (bbox[1] as num).toDouble(),
+          x1: (bbox[2] as num).toDouble(),
+          y1: (bbox[3] as num).toDouble(),
+        ),
+        lines: lines,
+      );
+    }).toList();
+    return StructuredTextPage(blocks: blocks);
+  }
+
+  Future<void> handleSelectionPanStart(
+    int pageIndex,
+    Offset localPosition,
+    double dpr,
+  ) async {
+    final stext = await _fetchStructuredText(pageIndex);
+    if (stext == null) return;
+
+    final lines = TextSelectionAlgorithm.flattenPage(stext);
+    final scale = state.globalScale;
+    final pdfX = TextSelectionAlgorithm.widgetToPdf(localPosition.dx, dpr, scale);
+    final pdfY = TextSelectionAlgorithm.widgetToPdf(localPosition.dy, dpr, scale);
+    final pos = TextSelectionAlgorithm.findNearestChar(lines, pdfX, pdfY);
+    print('PanStart at PDF pos: block ${pos.blockIndex}, line ${pos.lineIndex}, ${pos.charIndex}');
+    state = state.copyWith(
+      pageSelections: {
+        ...state.pageSelections,
+        pageIndex: PageTextSelection(
+          text: '',
+          highlightRects: [],
+          startPosition: pos,
+          endPosition: pos,
+          scale: scale,
+        ),
+      },
+    );
+  }
+
+  Future<void> handleSelectionPanUpdate(
+    int pageIndex,
+    Offset localPosition,
+    double dpr,
+  ) async {
+    final stext = state.stextCache[pageIndex];
+    if (stext == null) return;
+
+    final sel = state.pageSelections[pageIndex];
+    if (sel == null) return;
+
+    final lines = TextSelectionAlgorithm.flattenPage(stext);
+    final scale = state.globalScale;
+    final pdfX = TextSelectionAlgorithm.widgetToPdf(localPosition.dx, dpr, scale);
+    final pdfY = TextSelectionAlgorithm.widgetToPdf(localPosition.dy, dpr, scale);
+    final pos = TextSelectionAlgorithm.findNearestChar(lines, pdfX, pdfY);
+
+    // print('PanUpdate at PDF pos: block ${pos.blockIndex}, line ${pos.lineIndex}, ${pos.charIndex}');
+    if (pos == sel.endPosition) return;
+
+    // 跨 block 选择时，校验 block 的视觉顺序与阅读顺序是否一致，
+    // 避免复杂布局（如多栏）中 block 命中错误。
+    if (sel.startPosition.blockIndex != pos.blockIndex) {
+      final startBlockY = stext.blocks[sel.startPosition.blockIndex].bbox.y0;
+      final endBlockY = stext.blocks[pos.blockIndex].bbox.y0;
+      final isDownward = sel.startPosition < pos;
+      if (isDownward && endBlockY < startBlockY) return;
+      if (!isDownward && endBlockY > startBlockY) return;
+    }
+
+    final result = _buildSelection(stext, sel.startPosition, pos, dpr, scale);
+
+    state = state.copyWith(
+      pageSelections: {
+        ...state.pageSelections,
+        pageIndex: result,
+      },
+    );
+  }
+
+  void handleSelectionPanEnd(int pageIndex) {
+    // Selection finalized — kept in state for highlight + copy
+  }
+
+  PageTextSelection _buildSelection(
+    StructuredTextPage stext,
+    CharPosition a,
+    CharPosition b,
+    double dpr,
+    double scale,
+  ) {
+    final startPos = a <= b ? a : b;
+    final endPos = a <= b ? b : a;
+
+    final blocks = stext.blocks;
+    final textBuf = StringBuffer();
+    final rects = <HighlightRect>[];
+
+    for (int bi = startPos.blockIndex; bi <= endPos.blockIndex; bi++) {
+      final block = blocks[bi];
+      final lineStart = (bi == startPos.blockIndex) ? startPos.lineIndex : 0;
+      final lineEnd = (bi == endPos.blockIndex) ? endPos.lineIndex : block.lines.length - 1;
+
+      for (int li = lineStart; li <= lineEnd; li++) {
+        final line = block.lines[li];
+        if (line.chars.isEmpty) continue;
+
+        final charStart = (bi == startPos.blockIndex && li == startPos.lineIndex)
+            ? startPos.charIndex
+            : 0;
+        final charEnd = (bi == endPos.blockIndex && li == endPos.lineIndex)
+            ? endPos.charIndex
+            : line.chars.length - 1;
+
+        for (int ci = charStart; ci <= charEnd; ci++) {
+          textBuf.write(line.chars[ci].character);
+        }
+
+        final isLastLine = (bi == endPos.blockIndex && li == lineEnd);
+        if (!isLastLine) textBuf.write('\n');
+
+        final firstChar = line.chars[charStart];
+        final lastChar = line.chars[charEnd];
+        rects.add(HighlightRect(
+          left: TextSelectionAlgorithm.pdfToWidget(firstChar.bbox.x0, dpr, scale),
+          top: TextSelectionAlgorithm.pdfToWidget(line.bbox.y0, dpr, scale),
+          right: TextSelectionAlgorithm.pdfToWidget(lastChar.bbox.x1, dpr, scale),
+          bottom: TextSelectionAlgorithm.pdfToWidget(line.bbox.y1, dpr, scale),
+        ));
+      }
+    }
+
+    return PageTextSelection(
+      text: textBuf.toString(),
+      highlightRects: rects,
+      startPosition: a,
+      endPosition: b,
+      scale: scale,
+    );
+  }
+
+  void clearSelection([int? pageIndex]) {
+    if (pageIndex != null) {
+      final newSelections = Map<int, PageTextSelection>.from(state.pageSelections);
+      newSelections.remove(pageIndex);
+      state = state.copyWith(pageSelections: newSelections);
+    } else {
+      state = state.copyWith(pageSelections: const {});
+    }
+  }
+
+  void copySelectedText() {
+    final sel = state.pageSelections[state.currentPage];
+    if (sel == null || sel.text.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: sel.text));
+  }
+
   // ─── 内部渲染 / Isolate ──────────────────────────────────────────────
 
   Future<Map<String, dynamic>?> _renderPage(
@@ -846,8 +1074,31 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           'width': bitmap.width,
           'height': bitmap.height,
         });
+      } else if (type == 'getStructuredText') {
+        final int pageIndex = message['pageIndex'];
+        final stext = doc.getStructuredText(pageIndex);
+        replyPort.send({
+          'success': true,
+          'stext': _serializeStructuredText(stext),
+        });
       }
     });
+  }
+
+  static Map<String, dynamic> _serializeStructuredText(StructuredTextPage page) {
+    return {
+      'blocks': page.blocks.map((b) => {
+        'bbox': [b.bbox.x0, b.bbox.y0, b.bbox.x1, b.bbox.y1],
+        'lines': b.lines.map((l) => {
+          'bbox': [l.bbox.x0, l.bbox.y0, l.bbox.x1, l.bbox.y1],
+          'text': l.text,
+          'chars': l.chars.map((c) => {
+            'bbox': [c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1],
+            'c': c.character,
+          }).toList(),
+        }).toList(),
+      }).toList(),
+    };
   }
 }
 
@@ -1006,6 +1257,13 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
     final activeTabId = state.activeTabId;
     if (activeTabId != null) {
       ref.read(pdfReaderProvider(activeTabId).notifier).onCtrlPressed(isCtrl);
+
+      final isCtrlC = isCtrl &&
+          event is KeyDownEvent &&
+          event.logicalKey == LogicalKeyboardKey.keyC;
+      if (isCtrlC) {
+        ref.read(pdfReaderProvider(activeTabId).notifier).copySelectedText();
+      }
     }
     return false;
   }

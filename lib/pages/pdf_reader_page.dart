@@ -240,7 +240,7 @@ class PdfReaderPage extends HookConsumerWidget {
       onPanStart: (details) => windowManager.startDragging(),
       child: Container(
         height: 44,
-        decoration:  BoxDecoration(
+        decoration: BoxDecoration(
           color: Colors.blue[50],
           // border: Border(bottom: BorderSide(color: borderColor)),
         ),
@@ -265,7 +265,6 @@ class PdfReaderPage extends HookConsumerWidget {
                     ),
                     const SizedBox(width: 4),
                     _buildAddTabButton(context, workspaceNotifier),
-
                   ],
                 ),
               ),
@@ -331,16 +330,14 @@ class PdfReaderPage extends HookConsumerWidget {
         scrollDirection: Axis.horizontal,
         children: List.generate(openTabs.length, (i) {
           final tab = openTabs[i];
-          final showRightDivider = i != activeIndex &&
-              i + 1 != activeIndex;
+          final showRightDivider = i != activeIndex && i + 1 != activeIndex;
           return SizedBox(
             width: tabWidth,
             child: DocumentTab(
               fileName: tab.fileName,
               isActive: tab.fileHash == activeTabId,
               showRightDivider: showRightDivider,
-              onTap: () =>
-                  _switchToTab(ref, tab.fileHash, scrollController),
+              onTap: () => _switchToTab(ref, tab.fileHash, scrollController),
               onClose: () => workspaceNotifier.closeTab(tab.fileHash),
             ),
           );
@@ -360,8 +357,9 @@ class PdfReaderPage extends HookConsumerWidget {
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
-          onTap: () async =>
-              await workspaceNotifier.openPdf(View.of(context).devicePixelRatio),
+          onTap: () async => await workspaceNotifier.openPdf(
+            View.of(context).devicePixelRatio,
+          ),
           child: Container(
             width: 32,
             height: 32,
@@ -561,6 +559,9 @@ class PdfReaderPage extends HookConsumerWidget {
     );
     final currentMaxWidth =
         originalPagesMaxWidth * globalScale / devicePixelRatio;
+    final isSelectionMode = ref.watch(
+      pdfReaderProvider(activeTabId).select((state) => state.isSelectionMode),
+    );
 
     return Container(
       height: 48,
@@ -659,6 +660,13 @@ class PdfReaderPage extends HookConsumerWidget {
 
           const Spacer(),
 
+          _toolbarIconButton(
+            icon: Icons.text_fields,
+            tooltip: isSelectionMode ? '退出选择' : '文本选择',
+            isActive: isSelectionMode,
+            onTap: notifier.toggleSelectionMode,
+          ),
+          const SizedBox(width: 4),
           _toolbarActionButton(
             icon: Icons.edit_outlined,
             label: '编辑',
@@ -777,6 +785,9 @@ class PdfReaderPage extends HookConsumerWidget {
     final isCtrlPressed = ref.watch(
       pdfReaderProvider(activeTabId).select((state) => state.isCtrlPressed),
     );
+    final isSelectionMode = ref.watch(
+      pdfReaderProvider(activeTabId).select((state) => state.isSelectionMode),
+    );
     final totalPages = ref.watch(
       pdfReaderProvider(activeTabId).select((state) => state.totalPages),
     );
@@ -866,12 +877,12 @@ class PdfReaderPage extends HookConsumerWidget {
         controller: horizontalScrollController,
         children: [
           SizedBox(
-            width: math.max(currentMaxWidth, screenWidth),
+            width: math.max(currentMaxWidth, screenWidth - 64),
             child: ScrollConfiguration(
               behavior: const ScrollBehavior().copyWith(scrollbars: false),
               child: CustomScrollView(
                 controller: scrollController,
-                physics: isCtrlPressed
+                physics: (isCtrlPressed)
                     ? const NeverScrollableScrollPhysics()
                     : const ClampingScrollPhysics(),
                 slivers: [

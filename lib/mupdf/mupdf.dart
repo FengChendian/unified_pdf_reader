@@ -392,14 +392,14 @@ class StructuredTextPage {
 class PdfDocument {
   final MuPdfLibrary _lib;
 
-  // 维护独立的 ctx 和 doc，实现完美分离[cite: 1]
+  // 维护独立的 ctx 和 doc，实现完美分离
   Pointer<MuPdfContextOpaque> _ctx = nullptr;
   Pointer<MuPdfDocumentOpaque> _doc = nullptr;
 
   bool get isOpen => _doc != nullptr;
 
   PdfDocument({MuPdfLibrary? lib}) : _lib = lib ?? MuPdfLibrary() {
-    // 每个文档创建自己独立的上下文[cite: 1]
+    // 每个文档创建自己独立的上下文
     _ctx = _lib.ctxCreate();
     if (_ctx == nullptr) {
       throw Exception("Failed to create MuPDF context.");
