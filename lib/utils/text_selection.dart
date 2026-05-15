@@ -153,7 +153,7 @@ class TextSelectionAlgorithm {
     lines.sort((a, b) => a.y0.compareTo(b.y0));
     return lines;
   }
-
+  
   /// 二分查找包含 [pdfY] 的行，结合 [pdfX] 消歧义（多栏/多块），未命中则返回最近行。
   static int findLineIndex(List<FlatLine> lines, double pdfX, double pdfY) {
     if (lines.isEmpty) return 0;
@@ -230,6 +230,11 @@ class TextSelectionAlgorithm {
       }
     }
     return best;
+  }
+
+  /// 判断 pdfX 是否在行的水平范围 [x0, x1] 内
+  static bool isPointInLineXRange(FlatLine line, double pdfX) {
+    return pdfX >= line.x0 && pdfX <= line.x1;
   }
 
   /// pdfX 到行水平范围的距离：在范围内为 0，否则为到最近边界的距离

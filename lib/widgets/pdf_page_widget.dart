@@ -1,7 +1,9 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../providers/pdf_reader_provider.dart';
+import '../mupdf/mupdf.dart';
 import '../utils/text_selection.dart';
 import 'selection_highlight_painter.dart';
 
@@ -60,6 +62,8 @@ class PdfPageWidget extends HookConsumerWidget {
           )
         : null;
 
+    final isHoveringText = useState(true);
+
     return _buildPageContent(
       context,
       ref,
@@ -70,6 +74,7 @@ class PdfPageWidget extends HookConsumerWidget {
       pageImage,
       isSelectionMode,
       selection,
+      isHoveringText,
     );
   }
 
@@ -83,6 +88,7 @@ class PdfPageWidget extends HookConsumerWidget {
     ui.Image? pageImage,
     bool isSelectionMode,
     PageTextSelection? selection,
+    ValueNotifier<bool> isHoveringText,
   ) {
     if (originalWidth == 0 || originalHeight == 0) {
       return Center(
@@ -96,65 +102,56 @@ class PdfPageWidget extends HookConsumerWidget {
 
     final pageWidth = originalWidth / devicePixelRatio * scale;
     final pageHeight = originalHeight / devicePixelRatio * scale;
-    // print(pageWidth);
+
     Widget pageContent = SizedBox(
       width: pageWidth,
       height: pageHeight,
       child: Stack(
         children: [
-          // 底层：图片，现在填满 Stack 即可
           RawImage(
             image: pageImage,
-            fit: BoxFit.fill, // 这里可以用 fill，因为父级 AspectRatio 已经限制了比例
+            fit: BoxFit.fill,
             filterQuality: FilterQuality.medium,
           ),
-
-          // 高亮层：现在的 (0,0) 正好就是图片的左上角
           if (selection != null && selection.highlightRects.isNotEmpty)
             _buildSelectionHighlight(selection, scale),
         ],
       ),
     );
 
-    // Layer 1 (top): GestureDetector for text selection
     if (isSelectionMode) {
       final activeTabId = ref.read(
         workspaceProvider.select((s) => s.activeTabId),
       );
       return Center(
         child: MouseRegion(
-          cursor: SystemMouseCursors.text,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onPanStart: (details) {
-              // print(details.localPosition);
-              if (activeTabId == null) return;
-              ref
-                  .read(pdfReaderProvider(activeTabId).notifier)
-                  .handleSelectionPanStart(
-                    pageIndex,
-                    details.localPosition,
+          cursor: isHoveringText.value
+              ? SystemMouseCursors.text
+              : SystemMouseCursors.basic,
+          onHover: (event) {
+            if (activeTabId == null) {
+              isHoveringText.value = false;
+              return;
+            }
+            ref
+                .read(pdfReaderProvider(activeTabId).notifier)
+                .fetchStructuredText(pageIndex)
+                .then((stext) {
+                  if (stext == null) return;
+                  _updateHoverState(
+                    stext,
+                    event.localPosition.dx,
+                    event.localPosition.dy,
                     devicePixelRatio,
+                    scale,
+                    isHoveringText,
                   );
-            },
-            onPanUpdate: (details) {
-              if (activeTabId == null) return;
-              ref
-                  .read(pdfReaderProvider(activeTabId).notifier)
-                  .handleSelectionPanUpdate(
-                    pageIndex,
-                    details.localPosition,
-                    devicePixelRatio,
-                  );
-            },
-            onPanEnd: (_) {
-              if (activeTabId == null) return;
-              ref
-                  .read(pdfReaderProvider(activeTabId).notifier)
-                  .handleSelectionPanEnd(pageIndex);
-            },
-            child: pageContent,
-          ),
+                  ref
+                      .read(pdfReaderProvider(activeTabId).notifier)
+                      .setHoverState(pageIndex, isHoveringText.value);
+                });
+          },
+          child: pageContent,
         ),
       );
     }
@@ -181,5 +178,28 @@ class PdfPageWidget extends HookConsumerWidget {
           .toList();
     }
     return CustomPaint(painter: SelectionHighlightPainter(rects: displayRects));
+  }
+
+  void _updateHoverState(
+    StructuredTextPage stext,
+    double localX,
+    double localY,
+    double dpr,
+    double scale,
+    ValueNotifier<bool> isHoveringText,
+  ) {
+    final lines = TextSelectionAlgorithm.flattenPage(stext);
+    if (lines.isEmpty) {
+      isHoveringText.value = false;
+      return;
+    }
+    final pdfX = TextSelectionAlgorithm.widgetToPdf(localX, dpr, scale);
+    final pdfY = TextSelectionAlgorithm.widgetToPdf(localY, dpr, scale);
+    final lineIdx = TextSelectionAlgorithm.findLineIndex(lines, pdfX, pdfY);
+    final line = lines[lineIdx];
+    isHoveringText.value =
+        TextSelectionAlgorithm.isPointInLineXRange(line, pdfX) &&
+        pdfY >= line.y0 &&
+        pdfY <= line.y1;
   }
 }

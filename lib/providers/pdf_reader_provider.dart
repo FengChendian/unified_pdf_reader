@@ -53,6 +53,9 @@ class PdfReaderState {
   final Map<int, StructuredTextPage> stextCache;
   final bool isSelectionMode;
   final Map<int, PageTextSelection> pageSelections;
+  final bool isHoveringText;
+  final int? hoveringPageIndex;
+  final int? selectingStartPageIndex;
 
   const PdfReaderState({
     this.filePath,
@@ -81,6 +84,9 @@ class PdfReaderState {
     this.stextCache = const {},
     this.isSelectionMode = false,
     this.pageSelections = const {},
+    this.isHoveringText = false,
+    this.hoveringPageIndex,
+    this.selectingStartPageIndex,
   });
 
   PdfReaderState copyWith({
@@ -112,6 +118,11 @@ class PdfReaderState {
     Map<int, StructuredTextPage>? stextCache,
     bool? isSelectionMode,
     Map<int, PageTextSelection>? pageSelections,
+    bool? isHoveringText,
+    int? hoveringPageIndex,
+    bool clearHoveringPageIndex = false,
+    int? selectingStartPageIndex,
+    bool clearSelectingStartPageIndex = false,
   }) {
     return PdfReaderState(
       filePath: clearFilePath ? null : (filePath ?? this.filePath),
@@ -146,6 +157,13 @@ class PdfReaderState {
       stextCache: stextCache ?? this.stextCache,
       isSelectionMode: isSelectionMode ?? this.isSelectionMode,
       pageSelections: pageSelections ?? this.pageSelections,
+      isHoveringText: isHoveringText ?? this.isHoveringText,
+      hoveringPageIndex: clearHoveringPageIndex
+          ? null
+          : (hoveringPageIndex ?? this.hoveringPageIndex),
+      selectingStartPageIndex: clearSelectingStartPageIndex
+          ? null
+          : (selectingStartPageIndex ?? this.selectingStartPageIndex),
     );
   }
 }
@@ -497,7 +515,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     _isRenderingHighRes = true;
     try {
       while (_highResRenderQueue.isNotEmpty) {
-        while (_highResRenderQueue.length >( _highResWindowRadius * 2 + 1)) {
+        while (_highResRenderQueue.length > (_highResWindowRadius * 2 + 1)) {
           // 队列过长时优先渲染当前页附近的页面
           _highResRenderQueue.removeFirst();
         }
@@ -516,7 +534,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         //   state.totalPages - 1,
         // );
         // if (pageIndex < start || pageIndex > end) continue;
-        
 
         _currentlyRenderingPage = pageIndex;
         try {
@@ -775,11 +792,31 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   // ─── 文本选择 ──────────────────────────────────────────────────────
 
   void toggleSelectionMode() {
-    state = state.copyWith(isSelectionMode: !state.isSelectionMode);
+    state = state.copyWith(
+      isSelectionMode: !state.isSelectionMode,
+      clearHoveringPageIndex: true,
+      clearSelectingStartPageIndex: true,
+    );
   }
 
-  Future<StructuredTextPage?> _fetchStructuredText(int pageIndex) async {
-    if (state.stextCache.containsKey(pageIndex)) return state.stextCache[pageIndex];
+  void setHoverState(int pageIndex, bool isHovering) {
+    if (state.hoveringPageIndex != pageIndex && isHovering) {
+      state = state.copyWith(
+        isHoveringText: true,
+        hoveringPageIndex: pageIndex,
+      );
+    } else if (!isHovering && state.hoveringPageIndex == pageIndex) {
+      state = state.copyWith(
+        isHoveringText: false,
+        clearHoveringPageIndex: true,
+      );
+    }
+  }
+
+  Future<StructuredTextPage?> fetchStructuredText(int pageIndex) async {
+    if (state.stextCache.containsKey(pageIndex)) {
+      return state.stextCache[pageIndex];
+    }
     if (_pdfSendPort == null) return null;
 
     final responsePort = ReceivePort();
@@ -793,12 +830,16 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
     if (result['success'] != true) return null;
 
-    final stext = _deserializeStructuredText(result['stext'] as Map<String, dynamic>);
+    final stext = _deserializeStructuredText(
+      result['stext'] as Map<String, dynamic>,
+    );
     state = state.copyWith(stextCache: {...state.stextCache, pageIndex: stext});
     return stext;
   }
 
-  static StructuredTextPage _deserializeStructuredText(Map<String, dynamic> map) {
+  static StructuredTextPage _deserializeStructuredText(
+    Map<String, dynamic> map,
+  ) {
     final blocks = (map['blocks'] as List).map((b) {
       final bm = b as Map<String, dynamic>;
       final bbox = bm['bbox'] as List;
@@ -842,23 +883,29 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     return StructuredTextPage(blocks: blocks);
   }
 
-  Future<void> handleSelectionPanStart(
+  Future<void> handleSelectionStart(
     int pageIndex,
     Offset localPosition,
     double dpr,
   ) async {
-    final stext = await _fetchStructuredText(pageIndex);
+    final stext = await fetchStructuredText(pageIndex);
     if (stext == null) return;
-
     final lines = TextSelectionAlgorithm.flattenPage(stext);
     final scale = state.globalScale;
-    final pdfX = TextSelectionAlgorithm.widgetToPdf(localPosition.dx, dpr, scale);
-    final pdfY = TextSelectionAlgorithm.widgetToPdf(localPosition.dy, dpr, scale);
+    final pdfX = TextSelectionAlgorithm.widgetToPdf(
+      localPosition.dx,
+      dpr,
+      scale,
+    );
+    final pdfY = TextSelectionAlgorithm.widgetToPdf(
+      localPosition.dy,
+      dpr,
+      scale,
+    );
     final pos = TextSelectionAlgorithm.findNearestChar(lines, pdfX, pdfY);
-    print('PanStart at PDF pos: block ${pos.blockIndex}, line ${pos.lineIndex}, ${pos.charIndex}');
     state = state.copyWith(
+      selectingStartPageIndex: pageIndex,
       pageSelections: {
-        ...state.pageSelections,
         pageIndex: PageTextSelection(
           text: '',
           highlightRects: [],
@@ -870,28 +917,59 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     );
   }
 
-  Future<void> handleSelectionPanUpdate(
-    int pageIndex,
+  Future<void> handleSelectionUpdate(
+    int targetPageIndex,
     Offset localPosition,
     double dpr,
   ) async {
+    final startPageIndex = state.selectingStartPageIndex;
+    if (startPageIndex == null) return;
+
+    if (targetPageIndex == startPageIndex) {
+      _buildSinglePageSelection(targetPageIndex, localPosition, dpr);
+    } else {
+      await _buildMultiPageSelection(
+        startPageIndex,
+        targetPageIndex,
+        localPosition,
+        dpr,
+      );
+    }
+  }
+
+  void handleSelectionEnd() {
+    // Selection finalized — kept in state for highlight + copy.
+    // Clear the active-selection flag so future pans start fresh.
+    state = state.copyWith(clearSelectingStartPageIndex: true);
+  }
+
+  /// Build selection within a single page.
+  void _buildSinglePageSelection(
+    int pageIndex,
+    Offset localPosition,
+    double dpr,
+  ) {
+    final scale = state.globalScale;
     final stext = state.stextCache[pageIndex];
     if (stext == null) return;
-
     final sel = state.pageSelections[pageIndex];
     if (sel == null) return;
 
     final lines = TextSelectionAlgorithm.flattenPage(stext);
-    final scale = state.globalScale;
-    final pdfX = TextSelectionAlgorithm.widgetToPdf(localPosition.dx, dpr, scale);
-    final pdfY = TextSelectionAlgorithm.widgetToPdf(localPosition.dy, dpr, scale);
+    final pdfX = TextSelectionAlgorithm.widgetToPdf(
+      localPosition.dx,
+      dpr,
+      scale,
+    );
+    final pdfY = TextSelectionAlgorithm.widgetToPdf(
+      localPosition.dy,
+      dpr,
+      scale,
+    );
     final pos = TextSelectionAlgorithm.findNearestChar(lines, pdfX, pdfY);
-
-    // print('PanUpdate at PDF pos: block ${pos.blockIndex}, line ${pos.lineIndex}, ${pos.charIndex}');
+    // print('Selection pos: block ${pos.blockIndex}, line ${pos.lineIndex}, char ${pos.charIndex}');
     if (pos == sel.endPosition) return;
 
-    // 跨 block 选择时，校验 block 的视觉顺序与阅读顺序是否一致，
-    // 避免复杂布局（如多栏）中 block 命中错误。
     if (sel.startPosition.blockIndex != pos.blockIndex) {
       final startBlockY = stext.blocks[sel.startPosition.blockIndex].bbox.y0;
       final endBlockY = stext.blocks[pos.blockIndex].bbox.y0;
@@ -901,17 +979,113 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     }
 
     final result = _buildSelection(stext, sel.startPosition, pos, dpr, scale);
-
     state = state.copyWith(
-      pageSelections: {
-        ...state.pageSelections,
-        pageIndex: result,
-      },
+      pageSelections: {...state.pageSelections, pageIndex: result},
     );
   }
 
-  void handleSelectionPanEnd(int pageIndex) {
-    // Selection finalized — kept in state for highlight + copy
+  /// Build selection across multiple pages from [startPage] to [endPage].
+  Future<void> _buildMultiPageSelection(
+    int startPage,
+    int endPage,
+    Offset endLocalPosition,
+    double dpr,
+  ) async {
+    final scale = state.globalScale;
+    final startSel = state.pageSelections[startPage];
+    if (startSel == null) return;
+
+    // Ensure stext is cached for the end page
+    final endStext = await fetchStructuredText(endPage);
+    if (endStext == null) return;
+
+    // Determine direction
+    final goingDown = endPage > startPage;
+    final fromPage = goingDown ? startPage : endPage;
+    final toPage = goingDown ? endPage : startPage;
+
+    final newSelections = <int, PageTextSelection>{};
+
+    for (int pi = fromPage; pi <= toPage; pi++) {
+      final stext = state.stextCache[pi];
+      if (stext == null) continue;
+      final lines = TextSelectionAlgorithm.flattenPage(stext);
+      if (pi == startPage) {
+        final boundaryPos = goingDown
+            ? _lastCharPosition(lines)
+            : _firstCharPosition(lines);
+        newSelections[pi] = _buildSelection(
+          stext,
+          startSel.startPosition,
+          boundaryPos,
+          dpr,
+          scale,
+        );
+      } else if (pi == endPage) {
+        // final lines = TextSelectionAlgorithm.flattenPage(stext);
+        final pdfX = TextSelectionAlgorithm.widgetToPdf(
+          endLocalPosition.dx,
+          dpr,
+          scale,
+        );
+        final pdfY = TextSelectionAlgorithm.widgetToPdf(
+          endLocalPosition.dy,
+          dpr,
+          scale,
+        );
+        final pointerPos = TextSelectionAlgorithm.findNearestChar(lines, pdfX, pdfY);
+        final firstPos = goingDown
+            ? _firstCharPosition(lines)
+            : _lastCharPosition(lines);
+
+        if (firstPos.blockIndex != pointerPos.blockIndex) {
+          final startBlockY = stext.blocks[firstPos.blockIndex].bbox.y0;
+          final endBlockY = stext.blocks[pointerPos.blockIndex].bbox.y0;
+          // final isDownward = boundaryPos < pos;
+
+          if (goingDown && endBlockY < startBlockY) return;
+          if (!goingDown && endBlockY > startBlockY) return;
+        }
+
+        newSelections[pi] = _buildSelection(
+          stext,
+          firstPos,
+          pointerPos,
+          dpr,
+          scale,
+        );
+      } else {
+        
+        final startPos = _firstCharPosition(lines);
+        final endPos = _lastCharPosition(lines);
+        newSelections[pi] = _buildSelection(
+          stext,
+          startPos,
+          endPos,
+          dpr,
+          scale,
+        );
+      }
+    }
+
+    state = state.copyWith(
+      pageSelections: {...state.pageSelections, ...newSelections},
+    );
+  }
+
+  CharPosition _firstCharPosition(List<FlatLine> lines) {
+    // print(stat)
+    final line = lines.first;
+    return CharPosition(blockIndex: line.blockIndex, lineIndex: line.lineIndex, charIndex: 0);
+  }
+
+  CharPosition _lastCharPosition(List<FlatLine> lines) {
+    final line = lines.last;
+    return CharPosition(
+      blockIndex: line.blockIndex,
+      lineIndex: line.lineIndex,
+      charIndex: line.chars.length - 1,
+    );
   }
 
   PageTextSelection _buildSelection(
@@ -931,13 +1105,17 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     for (int bi = startPos.blockIndex; bi <= endPos.blockIndex; bi++) {
       final block = blocks[bi];
       final lineStart = (bi == startPos.blockIndex) ? startPos.lineIndex : 0;
-      final lineEnd = (bi == endPos.blockIndex) ? endPos.lineIndex : block.lines.length - 1;
+      print(lineStart);
+      final lineEnd = (bi == endPos.blockIndex)
+          ? endPos.lineIndex
+          : block.lines.length - 1;
 
       for (int li = lineStart; li <= lineEnd; li++) {
         final line = block.lines[li];
         if (line.chars.isEmpty) continue;
 
-        final charStart = (bi == startPos.blockIndex && li == startPos.lineIndex)
+        final charStart =
+            (bi == startPos.blockIndex && li == startPos.lineIndex)
             ? startPos.charIndex
             : 0;
         final charEnd = (bi == endPos.blockIndex && li == endPos.lineIndex)
@@ -953,12 +1131,26 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
         final firstChar = line.chars[charStart];
         final lastChar = line.chars[charEnd];
-        rects.add(HighlightRect(
-          left: TextSelectionAlgorithm.pdfToWidget(firstChar.bbox.x0, dpr, scale),
-          top: TextSelectionAlgorithm.pdfToWidget(line.bbox.y0, dpr, scale),
-          right: TextSelectionAlgorithm.pdfToWidget(lastChar.bbox.x1, dpr, scale),
-          bottom: TextSelectionAlgorithm.pdfToWidget(line.bbox.y1, dpr, scale),
-        ));
+        rects.add(
+          HighlightRect(
+            left: TextSelectionAlgorithm.pdfToWidget(
+              firstChar.bbox.x0,
+              dpr,
+              scale,
+            ),
+            top: TextSelectionAlgorithm.pdfToWidget(line.bbox.y0, dpr, scale),
+            right: TextSelectionAlgorithm.pdfToWidget(
+              lastChar.bbox.x1,
+              dpr,
+              scale,
+            ),
+            bottom: TextSelectionAlgorithm.pdfToWidget(
+              line.bbox.y1,
+              dpr,
+              scale,
+            ),
+          ),
+        );
       }
     }
 
@@ -973,7 +1165,9 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   void clearSelection([int? pageIndex]) {
     if (pageIndex != null) {
-      final newSelections = Map<int, PageTextSelection>.from(state.pageSelections);
+      final newSelections = Map<int, PageTextSelection>.from(
+        state.pageSelections,
+      );
       newSelections.remove(pageIndex);
       state = state.copyWith(pageSelections: newSelections);
     } else {
@@ -982,9 +1176,20 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   }
 
   void copySelectedText() {
-    final sel = state.pageSelections[state.currentPage];
-    if (sel == null || sel.text.isEmpty) return;
-    Clipboard.setData(ClipboardData(text: sel.text));
+    if (state.pageSelections.isEmpty) return;
+    final sortedKeys = state.pageSelections.keys.toList()..sort();
+    final buf = StringBuffer();
+    for (int i = 0; i < sortedKeys.length; i++) {
+      final text = state.pageSelections[sortedKeys[i]]!.text;
+      if (text.isEmpty) continue;
+      if (buf.isNotEmpty && !buf.toString().endsWith('\n')) {
+        buf.write('\n');
+      }
+      buf.write(text);
+    }
+    final result = buf.toString();
+    if (result.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: result));
   }
 
   // ─── 内部渲染 / Isolate ──────────────────────────────────────────────
@@ -1085,19 +1290,38 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     });
   }
 
-  static Map<String, dynamic> _serializeStructuredText(StructuredTextPage page) {
+  static Map<String, dynamic> _serializeStructuredText(
+    StructuredTextPage page,
+  ) {
     return {
-      'blocks': page.blocks.map((b) => {
-        'bbox': [b.bbox.x0, b.bbox.y0, b.bbox.x1, b.bbox.y1],
-        'lines': b.lines.map((l) => {
-          'bbox': [l.bbox.x0, l.bbox.y0, l.bbox.x1, l.bbox.y1],
-          'text': l.text,
-          'chars': l.chars.map((c) => {
-            'bbox': [c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1],
-            'c': c.character,
-          }).toList(),
-        }).toList(),
-      }).toList(),
+      'blocks': page.blocks
+          .map(
+            (b) => {
+              'bbox': [b.bbox.x0, b.bbox.y0, b.bbox.x1, b.bbox.y1],
+              'lines': b.lines
+                  .map(
+                    (l) => {
+                      'bbox': [l.bbox.x0, l.bbox.y0, l.bbox.x1, l.bbox.y1],
+                      'text': l.text,
+                      'chars': l.chars
+                          .map(
+                            (c) => {
+                              'bbox': [
+                                c.bbox.x0,
+                                c.bbox.y0,
+                                c.bbox.x1,
+                                c.bbox.y1,
+                              ],
+                              'c': c.character,
+                            },
+                          )
+                          .toList(),
+                    },
+                  )
+                  .toList(),
+            },
+          )
+          .toList(),
     };
   }
 }
@@ -1258,7 +1482,8 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
     if (activeTabId != null) {
       ref.read(pdfReaderProvider(activeTabId).notifier).onCtrlPressed(isCtrl);
 
-      final isCtrlC = isCtrl &&
+      final isCtrlC =
+          isCtrl &&
           event is KeyDownEvent &&
           event.logicalKey == LogicalKeyboardKey.keyC;
       if (isCtrlC) {

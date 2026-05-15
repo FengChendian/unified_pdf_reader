@@ -814,27 +814,46 @@ class PdfReaderPage extends HookConsumerWidget {
     final currentMaxWidth =
         originalPagesMaxWidth * globalScale / devicePixelRatio;
 
-    return Listener(
-      onPointerSignal: (event) => notifier.handlePointerSignal(
-        event,
-        scrollController,
-        horizontalScrollController,
-        devicePixelRatio,
-        screenWidth,
-        currentMaxWidth,
-      ),
-      child: _buildPdfView(
-        context,
-        notifier,
-        isCtrlPressed,
-        totalPages,
-        fileHash,
-        scrollController,
-        horizontalScrollController,
-        pageHeights,
-        currentMaxWidth,
-        globalScale,
-      ),
+    final pdfView = _buildPdfView(
+      context,
+      notifier,
+      isCtrlPressed,
+      totalPages,
+      fileHash,
+      scrollController,
+      horizontalScrollController,
+      pageHeights,
+      currentMaxWidth,
+      globalScale,
+    );
+
+    return Stack(
+      children: [
+        Listener(
+          onPointerSignal: (event) => notifier.handlePointerSignal(
+            event,
+            scrollController,
+            horizontalScrollController,
+            devicePixelRatio,
+            screenWidth,
+            currentMaxWidth,
+          ),
+          child: pdfView,
+        ),
+        if (isSelectionMode)
+          Positioned.fill(
+            child: _SelectionGestureLayer(
+              notifier: notifier,
+              scrollController: scrollController,
+              horizontalScrollController: horizontalScrollController,
+              pageHeights: pageHeights,
+              totalPages: totalPages,
+              globalScale: globalScale,
+              devicePixelRatio: devicePixelRatio,
+              currentMaxWidth: currentMaxWidth,
+            ),
+          ),
+      ],
     );
   }
 
@@ -978,5 +997,182 @@ class PdfReaderPage extends HookConsumerWidget {
         ),
       ),
     );
+  }
+}
+
+// ─── Selection Gesture Layer ─────────────────────────────────────────────
+
+class _SelectionGestureLayer extends HookConsumerWidget {
+  final PdfReaderNotifier notifier;
+  final ScrollController scrollController;
+  final ScrollController horizontalScrollController;
+  final Map<int, double>? pageHeights;
+  final int totalPages;
+  final double globalScale;
+  final double devicePixelRatio;
+  final double currentMaxWidth;
+
+  const _SelectionGestureLayer({
+    required this.notifier,
+    required this.scrollController,
+    required this.horizontalScrollController,
+    required this.pageHeights,
+    required this.totalPages,
+    required this.globalScale,
+    required this.devicePixelRatio,
+    required this.currentMaxWidth,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final activeTabId = ref.watch(workspaceProvider.select((s) => s.activeTabId));
+    final isHoveringText = activeTabId != null
+        ? ref.watch(pdfReaderProvider(activeTabId).select((s) => s.isHoveringText))
+        : false;
+
+    final isSelecting = useState(false);
+    final lastContentY = useState(0.0);
+
+    // Precompute scaled page heights and top offsets
+    final scaledHeights = useMemoized(() {
+      if (pageHeights == null) return <double>[];
+      return List<double>.generate(totalPages, (i) {
+        return (pageHeights![i] ?? 842) * globalScale;
+      });
+    }, [pageHeights, totalPages, globalScale]);
+
+    final pageTopOffsets = useMemoized(() {
+      final offsets = <double>[];
+      double acc = 0;
+      for (int i = 0; i < totalPages; i++) {
+        offsets.add(acc);
+        acc += (scaledHeights.length > i ? scaledHeights[i] : 842 * globalScale) + 10;
+      }
+      return offsets;
+    }, [scaledHeights]);
+
+    final screenWidth = MediaQuery.of(context).size.width;
+    final maxWidth = math.max(currentMaxWidth, screenWidth - 64);
+
+    final pageSizesForFile = useMemoized(() {
+      final id = ref.read(workspaceProvider.select((s) => s.activeTabId));
+      if (id == null) return null;
+      final state = ref.read(pdfReaderProvider(id));
+      final hash = state.fileHash;
+      if (hash == null) return null;
+      return state.docRawPageSizes[hash];
+    }, [activeTabId]);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onPanStart: isHoveringText
+          ? (details) {
+              isSelecting.value = true;
+              final contentY = details.localPosition.dy + scrollController.offset;
+              lastContentY.value = contentY;
+              final result = _mapToPage(
+                contentY,
+                details.localPosition.dx + horizontalScrollController.offset,
+                pageTopOffsets,
+                scaledHeights,
+                maxWidth,
+                pageSizesForFile,
+              );
+              if (result != null) {
+                notifier.handleSelectionStart(
+                  result.pageIndex,
+                  result.localPosition,
+                  devicePixelRatio,
+                );
+              }
+            }
+          : null,
+      onPanUpdate: isSelecting.value
+          ? (details) {
+              final contentY = details.localPosition.dy + scrollController.offset;
+              final contentX = details.localPosition.dx + horizontalScrollController.offset;
+              final goingDown = contentY >= lastContentY.value;
+              lastContentY.value = contentY;
+
+              var result = _mapToPage(contentY, contentX, pageTopOffsets, scaledHeights, maxWidth, pageSizesForFile);
+              result ??= _snapToNearestPage(contentY, contentX, pageTopOffsets, scaledHeights, maxWidth, pageSizesForFile, goingDown);
+              if (result != null) {
+                notifier.handleSelectionUpdate(
+                  result.pageIndex,
+                  result.localPosition,
+                  devicePixelRatio,
+                );
+              }
+            }
+          : null,
+      onPanEnd: isSelecting.value
+          ? (_) {
+              isSelecting.value = false;
+              notifier.handleSelectionEnd();
+            }
+          : null,
+    );
+  }
+
+  ({int pageIndex, Offset localPosition})? _mapToPage(
+    double contentY,
+    double contentX,
+    List<double> tops,
+    List<double> heights,
+    double maxWidth,
+    Map<int, List<int>>? pageSizesForFile,
+  ) {
+    for (int i = 0; i < tops.length && i < heights.length; i++) {
+      final top = tops[i];
+      final h = heights[i];
+      if (contentY >= top && contentY < top + h) {
+        final adjustedX = _adjustContentX(contentX, i, maxWidth, pageSizesForFile);
+        return (pageIndex: i, localPosition: Offset(adjustedX, contentY - top));
+      }
+    }
+    return null;
+  }
+
+  ({int pageIndex, Offset localPosition})? _snapToNearestPage(
+    double contentY,
+    double contentX,
+    List<double> tops,
+    List<double> heights,
+    double maxWidth,
+    Map<int, List<int>>? pageSizesForFile,
+    bool goingDown,
+  ) {
+    for (int i = 0; i < tops.length - 1 && i < heights.length; i++) {
+      final pageBottom = tops[i] + heights[i];
+      final nextPageTop = tops[i + 1];
+      if (contentY >= pageBottom && contentY < nextPageTop) {
+        if (goingDown) {
+          final adjustedX = _adjustContentX(contentX, i + 1, maxWidth, pageSizesForFile);
+          return (pageIndex: i + 1, localPosition: Offset(adjustedX, 1));
+        } else {
+          final adjustedX = _adjustContentX(contentX, i, maxWidth, pageSizesForFile);
+          return (pageIndex: i, localPosition: Offset(adjustedX, heights[i] - 1));
+        }
+      }
+    }
+    // Snap to first or last page if beyond all pages
+    if (tops.isNotEmpty && contentY < tops.first) {
+      final adjustedX = _adjustContentX(contentX, 0, maxWidth, pageSizesForFile);
+      return (pageIndex: 0, localPosition: Offset(adjustedX, 1));
+    }
+    if (tops.isNotEmpty && heights.isNotEmpty && contentY >= tops.last + heights.last) {
+      final lastIdx = tops.length - 1;
+      final adjustedX = _adjustContentX(contentX, lastIdx, maxWidth, pageSizesForFile);
+      return (pageIndex: lastIdx, localPosition: Offset(adjustedX, heights[lastIdx] - 1));
+    }
+    return null;
+  }
+
+  double _adjustContentX(double contentX, int pageIndex, double maxWidth, Map<int, List<int>>? pageSizesForFile) {
+    final rawSize = pageSizesForFile?[pageIndex];
+    if (rawSize == null || rawSize.length < 2) return contentX;
+    final pageWidth = rawSize[0] / devicePixelRatio * globalScale;
+    final leftPadding = (maxWidth - pageWidth) / 2;
+    return contentX - leftPadding;
   }
 }
