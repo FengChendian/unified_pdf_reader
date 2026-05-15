@@ -45,15 +45,6 @@ class PdfPageWidget extends HookConsumerWidget {
             pdfReaderProvider(activeTabId).select((state) => state.globalScale),
           )
         : 1.0;
-
-    final isSelectionMode = activeTabId != null
-        ? ref.watch(
-            pdfReaderProvider(
-              activeTabId,
-            ).select((state) => state.isSelectionMode),
-          )
-        : false;
-
     final selection = activeTabId != null
         ? ref.watch(
             pdfReaderProvider(
@@ -72,7 +63,6 @@ class PdfPageWidget extends HookConsumerWidget {
       scale,
       devicePixelRatio,
       pageImage,
-      isSelectionMode,
       selection,
       isHoveringText,
     );
@@ -86,7 +76,6 @@ class PdfPageWidget extends HookConsumerWidget {
     double scale,
     double devicePixelRatio,
     ui.Image? pageImage,
-    bool isSelectionMode,
     PageTextSelection? selection,
     ValueNotifier<bool> isHoveringText,
   ) {
@@ -108,10 +97,12 @@ class PdfPageWidget extends HookConsumerWidget {
       height: pageHeight,
       child: Stack(
         children: [
-          RawImage(
-            image: pageImage,
-            fit: BoxFit.fill,
-            filterQuality: FilterQuality.medium,
+          Positioned.fill(
+            child: RawImage(
+              image: pageImage,
+              fit: BoxFit.fill,
+              filterQuality: FilterQuality.medium,
+            ),
           ),
           if (selection != null && selection.highlightRects.isNotEmpty)
             _buildSelectionHighlight(selection, scale),
@@ -119,44 +110,37 @@ class PdfPageWidget extends HookConsumerWidget {
       ),
     );
 
-    if (isSelectionMode) {
-      final activeTabId = ref.read(
-        workspaceProvider.select((s) => s.activeTabId),
-      );
-      return Center(
-        child: MouseRegion(
-          cursor: isHoveringText.value
-              ? SystemMouseCursors.text
-              : SystemMouseCursors.basic,
-          onHover: (event) {
-            if (activeTabId == null) {
-              isHoveringText.value = false;
-              return;
-            }
-            ref
-                .read(pdfReaderProvider(activeTabId).notifier)
-                .fetchStructuredText(pageIndex)
-                .then((stext) {
-                  if (stext == null) return;
-                  _updateHoverState(
-                    stext,
-                    event.localPosition.dx,
-                    event.localPosition.dy,
-                    devicePixelRatio,
-                    scale,
-                    isHoveringText,
-                  );
-                  ref
-                      .read(pdfReaderProvider(activeTabId).notifier)
-                      .setHoverState(pageIndex, isHoveringText.value);
-                });
-          },
-          child: pageContent,
-        ),
-      );
-    }
-
-    return Center(child: pageContent);
+    final activeTabId = ref.read(
+      workspaceProvider.select((s) => s.activeTabId),
+    );
+    return Center(
+      child: MouseRegion(
+        cursor: isHoveringText.value
+            ? SystemMouseCursors.text
+            : SystemMouseCursors.basic,
+        onHover: (event) {
+          if (activeTabId == null) {
+            isHoveringText.value = false;
+            return;
+          }
+          final notifier = ref.read(pdfReaderProvider(activeTabId).notifier);
+          notifier.fetchStructuredText(pageIndex).then((stext) {
+            if (stext == null) return;
+            if (!context.mounted) return;
+            _updateHoverState(
+              stext,
+              event.localPosition.dx,
+              event.localPosition.dy,
+              devicePixelRatio,
+              scale,
+              isHoveringText,
+            );
+            notifier.setHoverState(pageIndex, isHoveringText.value);
+          });
+        },
+        child: pageContent,
+      ),
+    );
   }
 
   Widget _buildSelectionHighlight(

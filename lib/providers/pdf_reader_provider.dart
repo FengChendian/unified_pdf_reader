@@ -51,7 +51,7 @@ class PdfReaderState {
   final Set<String> expandedOutlineIds;
   final double savedScrollOffset;
   final Map<int, StructuredTextPage> stextCache;
-  final bool isSelectionMode;
+  // final bool isSelectionMode;
   final Map<int, PageTextSelection> pageSelections;
   final bool isHoveringText;
   final int? hoveringPageIndex;
@@ -82,7 +82,7 @@ class PdfReaderState {
     this.expandedOutlineIds = const {},
     this.savedScrollOffset = 0.0,
     this.stextCache = const {},
-    this.isSelectionMode = false,
+    // this.isSelectionMode = false,
     this.pageSelections = const {},
     this.isHoveringText = false,
     this.hoveringPageIndex,
@@ -116,7 +116,7 @@ class PdfReaderState {
     Set<String>? expandedOutlineIds,
     double? savedScrollOffset,
     Map<int, StructuredTextPage>? stextCache,
-    bool? isSelectionMode,
+    // bool? isSelectionMode,
     Map<int, PageTextSelection>? pageSelections,
     bool? isHoveringText,
     int? hoveringPageIndex,
@@ -155,7 +155,7 @@ class PdfReaderState {
       expandedOutlineIds: expandedOutlineIds ?? this.expandedOutlineIds,
       savedScrollOffset: savedScrollOffset ?? this.savedScrollOffset,
       stextCache: stextCache ?? this.stextCache,
-      isSelectionMode: isSelectionMode ?? this.isSelectionMode,
+      // isSelectionMode: isSelectionMode ?? this.isSelectionMode,
       pageSelections: pageSelections ?? this.pageSelections,
       isHoveringText: isHoveringText ?? this.isHoveringText,
       hoveringPageIndex: clearHoveringPageIndex
@@ -190,7 +190,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   final Queue<int> _highResRenderQueue = Queue<int>();
   bool _isRenderingHighRes = false;
-  int? _currentlyRenderingPage;
+  // int? _currentlyRenderingPage;
   double _lastDevicePixelRatio = 1.0;
 
   static const double _separatorHeight = 10.0;
@@ -228,7 +228,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     _stopHighResTimer();
     _highResRenderQueue.clear();
     _isRenderingHighRes = false;
-    _currentlyRenderingPage = null;
+    // _currentlyRenderingPage = null;
   }
 
   // ─── 生命周期：关闭（全部清理） ────────────────────────────────────────
@@ -238,7 +238,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     _hideIndicatorTimer?.cancel();
     _highResRenderQueue.clear();
     _isRenderingHighRes = false;
-    _currentlyRenderingPage = null;
+    // _currentlyRenderingPage = null;
     _killIsolate();
     _pdfReceivePort?.close();
     _pdfReceivePort = null;
@@ -535,7 +535,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         // );
         // if (pageIndex < start || pageIndex > end) continue;
 
-        _currentlyRenderingPage = pageIndex;
+        // _currentlyRenderingPage = pageIndex;
         try {
           final renderScale = _highResScaleFactor * _lastDevicePixelRatio;
           final result = await _renderPage(pageIndex, scale: renderScale);
@@ -552,7 +552,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           newHighRes[pageIndex] = img;
           state = state.copyWith(highResPageImages: newHighRes);
         } finally {
-          _currentlyRenderingPage = null;
+          // _currentlyRenderingPage = null;
         }
       }
     } finally {
@@ -567,7 +567,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     ScrollController scrollController,
     ScrollController horizontalScrollController,
     double devicePixelRatio,
-    double screenWidth,
+    double pdfviewWidth,
     double currentPagesMaxWidth,
   ) {
     if (event is PointerScrollEvent && state.isCtrlPressed) {
@@ -590,9 +590,10 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         _mouseX = event.localPosition.dx;
         _horizontalScrollOffset = horizontalScrollController.offset;
 
-        if (currentPagesMaxWidth < screenWidth &&
-            newPagesMaxWidth >= screenWidth) {
-          leftPadding = (screenWidth - currentPagesMaxWidth) / 2;
+        if (currentPagesMaxWidth < pdfviewWidth &&
+            newPagesMaxWidth >= pdfviewWidth) {
+          leftPadding = (pdfviewWidth - currentPagesMaxWidth) / 2;
+          // print(leftPadding);
         } else {
           leftPadding = 0;
         }
@@ -604,7 +605,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         horizontalScrollController,
         devicePixelRatio,
         newPagesMaxWidth,
-        screenWidth,
+        pdfviewWidth,
         leftPadding,
       );
     } else {
@@ -623,7 +624,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     double delta,
     ScrollController scrollController,
     double devicePixelRatio,
-    double screenWidth,
+    double pdfViewWidth,
     double currentPagesMaxWidth, [
     ScrollController? hController,
   ]) {
@@ -642,9 +643,9 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       _mouseX = hController.position.viewportDimension / 2;
       _horizontalScrollOffset = hController.offset;
 
-      if (currentPagesMaxWidth < screenWidth &&
-          newPagesMaxWidth >= screenWidth) {
-        leftPadding = (screenWidth - currentPagesMaxWidth) / 2;
+      if (currentPagesMaxWidth < pdfViewWidth &&
+          newPagesMaxWidth >= pdfViewWidth) {
+        leftPadding = (pdfViewWidth - currentPagesMaxWidth) / 2;
       }
     }
     onScaleChanged(
@@ -653,7 +654,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       hController,
       devicePixelRatio,
       newPagesMaxWidth,
-      screenWidth,
+      pdfViewWidth,
       leftPadding,
     );
   }
@@ -791,13 +792,13 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   // ─── 文本选择 ──────────────────────────────────────────────────────
 
-  void toggleSelectionMode() {
-    state = state.copyWith(
-      isSelectionMode: !state.isSelectionMode,
-      clearHoveringPageIndex: true,
-      clearSelectingStartPageIndex: true,
-    );
-  }
+  // void toggleSelectionMode() {
+  //   state = state.copyWith(
+  //     isSelectionMode: !state.isSelectionMode,
+  //     clearHoveringPageIndex: true,
+  //     clearSelectingStartPageIndex: true,
+  //   );
+  // }
 
   void setHoverState(int pageIndex, bool isHovering) {
     if (state.hoveringPageIndex != pageIndex && isHovering) {
@@ -1095,63 +1096,49 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     double dpr,
     double scale,
   ) {
-    final startPos = a <= b ? a : b;
-    final endPos = a <= b ? b : a;
+    final flatLines = TextSelectionAlgorithm.flattenPage(stext);
 
-    final blocks = stext.blocks;
+    int startIdx = TextSelectionAlgorithm.findFlatLineIndex(
+      flatLines, a.blockIndex, a.lineIndex,
+    );
+    int endIdx = TextSelectionAlgorithm.findFlatLineIndex(
+      flatLines, b.blockIndex, b.lineIndex,
+    );
+
+    int cStart, cEnd;
+    if (startIdx <= endIdx) {
+      cStart = a.charIndex; cEnd = b.charIndex;
+    } else {
+      cStart = b.charIndex; cEnd = a.charIndex;
+      final temp = startIdx; startIdx = endIdx; endIdx = temp;
+    }
+
     final textBuf = StringBuffer();
     final rects = <HighlightRect>[];
 
-    for (int bi = startPos.blockIndex; bi <= endPos.blockIndex; bi++) {
-      final block = blocks[bi];
-      final lineStart = (bi == startPos.blockIndex) ? startPos.lineIndex : 0;
-      print(lineStart);
-      final lineEnd = (bi == endPos.blockIndex)
-          ? endPos.lineIndex
-          : block.lines.length - 1;
+    for (int i = startIdx; i <= endIdx; i++) {
+      final line = flatLines[i];
+      if (line.chars.isEmpty) continue;
 
-      for (int li = lineStart; li <= lineEnd; li++) {
-        final line = block.lines[li];
-        if (line.chars.isEmpty) continue;
+      final ci0 = (i == startIdx) ? cStart : 0;
+      final ci1 = (i == endIdx) ? cEnd : line.chars.length - 1;
 
-        final charStart =
-            (bi == startPos.blockIndex && li == startPos.lineIndex)
-            ? startPos.charIndex
-            : 0;
-        final charEnd = (bi == endPos.blockIndex && li == endPos.lineIndex)
-            ? endPos.charIndex
-            : line.chars.length - 1;
-
-        for (int ci = charStart; ci <= charEnd; ci++) {
-          textBuf.write(line.chars[ci].character);
-        }
-
-        final isLastLine = (bi == endPos.blockIndex && li == lineEnd);
-        if (!isLastLine) textBuf.write('\n');
-
-        final firstChar = line.chars[charStart];
-        final lastChar = line.chars[charEnd];
-        rects.add(
-          HighlightRect(
-            left: TextSelectionAlgorithm.pdfToWidget(
-              firstChar.bbox.x0,
-              dpr,
-              scale,
-            ),
-            top: TextSelectionAlgorithm.pdfToWidget(line.bbox.y0, dpr, scale),
-            right: TextSelectionAlgorithm.pdfToWidget(
-              lastChar.bbox.x1,
-              dpr,
-              scale,
-            ),
-            bottom: TextSelectionAlgorithm.pdfToWidget(
-              line.bbox.y1,
-              dpr,
-              scale,
-            ),
-          ),
-        );
+      for (int ci = ci0; ci <= ci1; ci++) {
+        textBuf.write(line.chars[ci].character);
       }
+
+      if (i < endIdx) textBuf.write('\n');
+
+      final firstChar = line.chars[ci0];
+      final lastChar = line.chars[ci1];
+      rects.add(
+        HighlightRect(
+          left: TextSelectionAlgorithm.pdfToWidget(firstChar.x0, dpr, scale),
+          top: TextSelectionAlgorithm.pdfToWidget(line.y0, dpr, scale),
+          right: TextSelectionAlgorithm.pdfToWidget(lastChar.x1, dpr, scale),
+          bottom: TextSelectionAlgorithm.pdfToWidget(line.y1, dpr, scale),
+        ),
+      );
     }
 
     return PageTextSelection(

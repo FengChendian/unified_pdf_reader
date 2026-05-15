@@ -286,6 +286,15 @@ class TextSelectionAlgorithm {
     );
   }
 
+  /// 在已排序的 FlatLine 列表中查找匹配 [blockIndex] 和 [lineIndex] 的索引
+  static int findFlatLineIndex(List<FlatLine> lines, int blockIndex, int lineIndex) {
+    for (int i = 0; i < lines.length; i++) {
+      final l = lines[i];
+      if (l.blockIndex == blockIndex && l.lineIndex == lineIndex) return i;
+    }
+    return -1;
+  }
+
   /// Widget 逻辑像素 → PDF 坐标
   static double widgetToPdf(double widgetCoord, double dpr, double scale) {
     return widgetCoord * dpr / scale;

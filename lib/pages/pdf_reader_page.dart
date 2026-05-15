@@ -552,16 +552,17 @@ class PdfReaderPage extends HookConsumerWidget {
     final globalScale = ref.watch(
       pdfReaderProvider(activeTabId).select((state) => state.globalScale),
     );
-    final screenWidth = MediaQuery.of(context).size.width;
+    // final screenWidth = MediaQuery.of(context).size.width;
+    final pdfViewWidth = MediaQuery.of(context).size.width - 64;
     final devicePixelRatio = View.of(context).devicePixelRatio;
     final originalPagesMaxWidth = ref.watch(
       pdfReaderProvider(activeTabId).select((s) => s.originalPagesMaxWidth),
     );
     final currentMaxWidth =
         originalPagesMaxWidth * globalScale / devicePixelRatio;
-    final isSelectionMode = ref.watch(
-      pdfReaderProvider(activeTabId).select((state) => state.isSelectionMode),
-    );
+    // final isSelectionMode = ref.watch(
+    //   pdfReaderProvider(activeTabId).select((state) => state.isSelectionMode),
+    // );
 
     return Container(
       height: 48,
@@ -619,7 +620,7 @@ class PdfReaderPage extends HookConsumerWidget {
               -0.1,
               scrollController,
               devicePixelRatio,
-              screenWidth,
+              pdfViewWidth,
               currentMaxWidth,
               horizontalScrollController,
             ),
@@ -643,7 +644,7 @@ class PdfReaderPage extends HookConsumerWidget {
               0.1,
               scrollController,
               devicePixelRatio,
-              screenWidth,
+              pdfViewWidth,
               currentMaxWidth,
               horizontalScrollController,
             ),
@@ -660,12 +661,12 @@ class PdfReaderPage extends HookConsumerWidget {
 
           const Spacer(),
 
-          _toolbarIconButton(
-            icon: Icons.text_fields,
-            tooltip: isSelectionMode ? '退出选择' : '文本选择',
-            isActive: isSelectionMode,
-            onTap: notifier.toggleSelectionMode,
-          ),
+          // _toolbarIconButton(
+          //   icon: Icons.text_fields,
+          //   tooltip: isSelectionMode ? '退出选择' : '文本选择',
+          //   isActive: isSelectionMode,
+          //   onTap: notifier.toggleSelectionMode,
+          // ),
           const SizedBox(width: 4),
           _toolbarActionButton(
             icon: Icons.edit_outlined,
@@ -785,9 +786,7 @@ class PdfReaderPage extends HookConsumerWidget {
     final isCtrlPressed = ref.watch(
       pdfReaderProvider(activeTabId).select((state) => state.isCtrlPressed),
     );
-    final isSelectionMode = ref.watch(
-      pdfReaderProvider(activeTabId).select((state) => state.isSelectionMode),
-    );
+
     final totalPages = ref.watch(
       pdfReaderProvider(activeTabId).select((state) => state.totalPages),
     );
@@ -809,7 +808,8 @@ class PdfReaderPage extends HookConsumerWidget {
       return const Center(child: Text("请打开 PDF 文件"));
     }
 
-    final screenWidth = MediaQuery.of(context).size.width;
+    final pdfViewWidth = MediaQuery.of(context).size.width - 64;
+
     final devicePixelRatio = View.of(context).devicePixelRatio;
     final currentMaxWidth =
         originalPagesMaxWidth * globalScale / devicePixelRatio;
@@ -835,24 +835,23 @@ class PdfReaderPage extends HookConsumerWidget {
             scrollController,
             horizontalScrollController,
             devicePixelRatio,
-            screenWidth,
+            pdfViewWidth,
             currentMaxWidth,
           ),
           child: pdfView,
         ),
-        if (isSelectionMode)
-          Positioned.fill(
-            child: _SelectionGestureLayer(
-              notifier: notifier,
-              scrollController: scrollController,
-              horizontalScrollController: horizontalScrollController,
-              pageHeights: pageHeights,
-              totalPages: totalPages,
-              globalScale: globalScale,
-              devicePixelRatio: devicePixelRatio,
-              currentMaxWidth: currentMaxWidth,
-            ),
+        Positioned.fill(
+          child: _SelectionGestureLayer(
+            notifier: notifier,
+            scrollController: scrollController,
+            horizontalScrollController: horizontalScrollController,
+            pageHeights: pageHeights,
+            totalPages: totalPages,
+            globalScale: globalScale,
+            devicePixelRatio: devicePixelRatio,
+            currentMaxWidth: currentMaxWidth,
           ),
+        ),
       ],
     );
   }
@@ -1025,12 +1024,16 @@ class _SelectionGestureLayer extends HookConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final activeTabId = ref.watch(workspaceProvider.select((s) => s.activeTabId));
+    final activeTabId = ref.watch(
+      workspaceProvider.select((s) => s.activeTabId),
+    );
     final isHoveringText = activeTabId != null
-        ? ref.watch(pdfReaderProvider(activeTabId).select((s) => s.isHoveringText))
+        ? ref.watch(
+            pdfReaderProvider(activeTabId).select((s) => s.isHoveringText),
+          )
         : false;
 
-    final isSelecting = useState(false);
+    // final isSelecting = useState(false);
     final lastContentY = useState(0.0);
 
     // Precompute scaled page heights and top offsets
@@ -1046,7 +1049,9 @@ class _SelectionGestureLayer extends HookConsumerWidget {
       double acc = 0;
       for (int i = 0; i < totalPages; i++) {
         offsets.add(acc);
-        acc += (scaledHeights.length > i ? scaledHeights[i] : 842 * globalScale) + 10;
+        acc +=
+            (scaledHeights.length > i ? scaledHeights[i] : 842 * globalScale) +
+            10;
       }
       return offsets;
     }, [scaledHeights]);
@@ -1065,10 +1070,12 @@ class _SelectionGestureLayer extends HookConsumerWidget {
 
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
+      onTap: () => notifier.clearSelection(),
       onPanStart: isHoveringText
           ? (details) {
-              isSelecting.value = true;
-              final contentY = details.localPosition.dy + scrollController.offset;
+              // isSelecting.value = true;
+              final contentY =
+                  details.localPosition.dy + scrollController.offset;
               lastContentY.value = contentY;
               final result = _mapToPage(
                 contentY,
@@ -1087,30 +1094,41 @@ class _SelectionGestureLayer extends HookConsumerWidget {
               }
             }
           : null,
-      onPanUpdate: isSelecting.value
-          ? (details) {
-              final contentY = details.localPosition.dy + scrollController.offset;
-              final contentX = details.localPosition.dx + horizontalScrollController.offset;
-              final goingDown = contentY >= lastContentY.value;
-              lastContentY.value = contentY;
+      onPanUpdate: (details) {
+        final contentY = details.localPosition.dy + scrollController.offset;
+        final contentX =
+            details.localPosition.dx + horizontalScrollController.offset;
+        final goingDown = contentY >= lastContentY.value;
+        lastContentY.value = contentY;
 
-              var result = _mapToPage(contentY, contentX, pageTopOffsets, scaledHeights, maxWidth, pageSizesForFile);
-              result ??= _snapToNearestPage(contentY, contentX, pageTopOffsets, scaledHeights, maxWidth, pageSizesForFile, goingDown);
-              if (result != null) {
-                notifier.handleSelectionUpdate(
-                  result.pageIndex,
-                  result.localPosition,
-                  devicePixelRatio,
-                );
-              }
-            }
-          : null,
-      onPanEnd: isSelecting.value
-          ? (_) {
-              isSelecting.value = false;
-              notifier.handleSelectionEnd();
-            }
-          : null,
+        var result = _mapToPage(
+          contentY,
+          contentX,
+          pageTopOffsets,
+          scaledHeights,
+          maxWidth,
+          pageSizesForFile,
+        );
+        result ??= _snapToNearestPage(
+          contentY,
+          contentX,
+          pageTopOffsets,
+          scaledHeights,
+          maxWidth,
+          pageSizesForFile,
+          goingDown,
+        );
+        if (result != null) {
+          notifier.handleSelectionUpdate(
+            result.pageIndex,
+            result.localPosition,
+            devicePixelRatio,
+          );
+        }
+      },
+      onPanEnd: (_) {
+        notifier.handleSelectionEnd();
+      },
     );
   }
 
@@ -1126,7 +1144,12 @@ class _SelectionGestureLayer extends HookConsumerWidget {
       final top = tops[i];
       final h = heights[i];
       if (contentY >= top && contentY < top + h) {
-        final adjustedX = _adjustContentX(contentX, i, maxWidth, pageSizesForFile);
+        final adjustedX = _adjustContentX(
+          contentX,
+          i,
+          maxWidth,
+          pageSizesForFile,
+        );
         return (pageIndex: i, localPosition: Offset(adjustedX, contentY - top));
       }
     }
@@ -1147,28 +1170,61 @@ class _SelectionGestureLayer extends HookConsumerWidget {
       final nextPageTop = tops[i + 1];
       if (contentY >= pageBottom && contentY < nextPageTop) {
         if (goingDown) {
-          final adjustedX = _adjustContentX(contentX, i + 1, maxWidth, pageSizesForFile);
+          final adjustedX = _adjustContentX(
+            contentX,
+            i + 1,
+            maxWidth,
+            pageSizesForFile,
+          );
           return (pageIndex: i + 1, localPosition: Offset(adjustedX, 1));
         } else {
-          final adjustedX = _adjustContentX(contentX, i, maxWidth, pageSizesForFile);
-          return (pageIndex: i, localPosition: Offset(adjustedX, heights[i] - 1));
+          final adjustedX = _adjustContentX(
+            contentX,
+            i,
+            maxWidth,
+            pageSizesForFile,
+          );
+          return (
+            pageIndex: i,
+            localPosition: Offset(adjustedX, heights[i] - 1),
+          );
         }
       }
     }
     // Snap to first or last page if beyond all pages
     if (tops.isNotEmpty && contentY < tops.first) {
-      final adjustedX = _adjustContentX(contentX, 0, maxWidth, pageSizesForFile);
+      final adjustedX = _adjustContentX(
+        contentX,
+        0,
+        maxWidth,
+        pageSizesForFile,
+      );
       return (pageIndex: 0, localPosition: Offset(adjustedX, 1));
     }
-    if (tops.isNotEmpty && heights.isNotEmpty && contentY >= tops.last + heights.last) {
+    if (tops.isNotEmpty &&
+        heights.isNotEmpty &&
+        contentY >= tops.last + heights.last) {
       final lastIdx = tops.length - 1;
-      final adjustedX = _adjustContentX(contentX, lastIdx, maxWidth, pageSizesForFile);
-      return (pageIndex: lastIdx, localPosition: Offset(adjustedX, heights[lastIdx] - 1));
+      final adjustedX = _adjustContentX(
+        contentX,
+        lastIdx,
+        maxWidth,
+        pageSizesForFile,
+      );
+      return (
+        pageIndex: lastIdx,
+        localPosition: Offset(adjustedX, heights[lastIdx] - 1),
+      );
     }
     return null;
   }
 
-  double _adjustContentX(double contentX, int pageIndex, double maxWidth, Map<int, List<int>>? pageSizesForFile) {
+  double _adjustContentX(
+    double contentX,
+    int pageIndex,
+    double maxWidth,
+    Map<int, List<int>>? pageSizesForFile,
+  ) {
     final rawSize = pageSizesForFile?[pageIndex];
     if (rawSize == null || rawSize.length < 2) return contentX;
     final pageWidth = rawSize[0] / devicePixelRatio * globalScale;
