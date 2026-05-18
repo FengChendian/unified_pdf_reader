@@ -96,6 +96,37 @@ final class MuPdfTextPage extends Struct {
   external Pointer<MuPdfTextBlock> blocks;
 }
 
+/// 页面注释结构体映射
+final class MuPdfAnnotation extends Struct {
+  external MuPdfRect rect;
+
+  @Int32()
+  external int type;
+}
+
+/// 注释列表结构体映射
+final class MuPdfAnnotationPage extends Struct {
+  @Int32()
+  external int annots_count;
+
+  external Pointer<MuPdfAnnotation> annots;
+}
+
+/// 页面链接结构体映射
+final class MuPdfLink extends Struct {
+  external MuPdfRect rect;
+
+  external Pointer<Utf8> uri;
+}
+
+/// 链接列表结构体映射
+final class MuPdfLinkPage extends Struct {
+  @Int32()
+  external int links_count;
+
+  external Pointer<MuPdfLink> links;
+}
+
 // ==========================================
 // 2. DLL 加载与 API 绑定类
 // ==========================================
@@ -146,6 +177,41 @@ class MuPdfLibrary {
   )
   pageGetStext;
   late final void Function(Pointer<MuPdfTextPage>) stextPageFree;
+  late final Pointer<MuPdfAnnotationPage> Function(
+    Pointer<MuPdfContextOpaque>,
+    Pointer<MuPdfDocumentOpaque>,
+    int,
+  )
+  pageGetAnnots;
+  late final void Function(Pointer<MuPdfAnnotationPage>) annotPageFree;
+  late final int Function(
+    Pointer<MuPdfContextOpaque>,
+    Pointer<MuPdfDocumentOpaque>,
+    int,
+    int,
+    MuPdfRect,
+  )
+  pageAddAnnot;
+  late final int Function(
+    Pointer<MuPdfContextOpaque>,
+    Pointer<MuPdfDocumentOpaque>,
+    int,
+    int,
+  )
+  pageDeleteAnnot;
+  late final Pointer<MuPdfLinkPage> Function(
+    Pointer<MuPdfContextOpaque>,
+    Pointer<MuPdfDocumentOpaque>,
+    int,
+  )
+  pageGetLinks;
+  late final void Function(Pointer<MuPdfLinkPage>) linkPageFree;
+  late final int Function(
+    Pointer<MuPdfContextOpaque>,
+    Pointer<MuPdfDocumentOpaque>,
+    Pointer<Utf8>,
+  )
+  docSave;
 
   /// 初始化并加载 DLL。默认从当前 exe 所在根目录加载
   MuPdfLibrary({String dllName = 'mupdf.dll'}) {
@@ -273,6 +339,94 @@ class MuPdfLibrary {
           Void Function(Pointer<MuPdfTextPage>),
           void Function(Pointer<MuPdfTextPage>)
         >('mupdf_stext_page_free');
+
+    pageGetAnnots = _dylib
+        .lookupFunction<
+          Pointer<MuPdfAnnotationPage> Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            Int32,
+          ),
+          Pointer<MuPdfAnnotationPage> Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            int,
+          )
+        >('mupdf_page_get_annots');
+
+    annotPageFree = _dylib
+        .lookupFunction<
+          Void Function(Pointer<MuPdfAnnotationPage>),
+          void Function(Pointer<MuPdfAnnotationPage>)
+        >('mupdf_annot_page_free');
+
+    pageAddAnnot = _dylib
+        .lookupFunction<
+          Int32 Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            Int32,
+            Int32,
+            MuPdfRect,
+          ),
+          int Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            int,
+            int,
+            MuPdfRect,
+          )
+        >('mupdf_page_add_annot');
+
+    pageDeleteAnnot = _dylib
+        .lookupFunction<
+          Int32 Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            Int32,
+            Int32,
+          ),
+          int Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            int,
+            int,
+          )
+        >('mupdf_page_delete_annot');
+
+    pageGetLinks = _dylib
+        .lookupFunction<
+          Pointer<MuPdfLinkPage> Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            Int32,
+          ),
+          Pointer<MuPdfLinkPage> Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            int,
+          )
+        >('mupdf_page_get_links');
+
+    linkPageFree = _dylib
+        .lookupFunction<
+          Void Function(Pointer<MuPdfLinkPage>),
+          void Function(Pointer<MuPdfLinkPage>)
+        >('mupdf_link_page_free');
+
+    docSave = _dylib
+        .lookupFunction<
+          Int32 Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            Pointer<Utf8>,
+          ),
+          int Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            Pointer<Utf8>,
+          )
+        >('mupdf_doc_save');
   }
 }
 
@@ -301,9 +455,9 @@ class RenderedPage {
 class OutlineItem {
   final String title;
   final String uri;
-  final int page;      // 页码 (-1 表示外部链接或无目标)
-  final bool isOpen;   // 是否展开
-  final int flags;     // 1=粗体，2=斜体
+  final int page; // 页码 (-1 表示外部链接或无目标)
+  final bool isOpen; // 是否展开
+  final int flags; // 1=粗体，2=斜体
   final List<OutlineItem> children;
 
   bool get isBold => (flags & 1) != 0;
@@ -326,9 +480,8 @@ class OutlineItem {
       page: json['page'] as int? ?? -1,
       isOpen: json['isOpen'] as bool? ?? false,
       flags: json['flags'] as int? ?? 0,
-      children: (json['children'] as List?)
-              ?.map((c) => _parse(c as Map))
-              .toList() ??
+      children:
+          (json['children'] as List?)?.map((c) => _parse(c as Map)).toList() ??
           [],
     );
   }
@@ -350,6 +503,10 @@ class PdfRect {
     required this.x1,
     required this.y1,
   });
+
+  Map<String, double> toMap() => {
+    'x0': x0, 'y0': y0, 'x1': x1, 'y1': y1,
+  };
 }
 
 /// 单个字符
@@ -366,11 +523,7 @@ class TextLine {
   final String text;
   final List<TextChar> chars;
 
-  const TextLine({
-    required this.bbox,
-    required this.text,
-    required this.chars,
-  });
+  const TextLine({required this.bbox, required this.text, required this.chars});
 }
 
 /// 文本块
@@ -386,6 +539,38 @@ class StructuredTextPage {
   final List<TextBlock> blocks;
 
   const StructuredTextPage({required this.blocks});
+}
+
+/// 页面注释
+class Annotation {
+  final PdfRect rect;
+  final int type;
+
+  const Annotation({required this.rect, required this.type});
+
+  Map<String, dynamic> toMap() => {
+    'rect': rect.toMap(),
+    'type': type,
+  };
+
+  /// PDF_ANNOT_TEXT = 0, PDF_ANNOT_LINK = 1, PDF_ANNOT_FREE_TEXT = 2,
+  /// PDF_ANNOT_LINE = 3, PDF_ANNOT_SQUARE = 4, PDF_ANNOT_CIRCLE = 5,
+  /// PDF_ANNOT_POLYGON = 6, PDF_ANNOT_POLY_LINE = 7, PDF_ANNOT_HIGHLIGHT = 8,
+  /// PDF_ANNOT_UNDERLINE = 9, PDF_ANNOT_SQUIGGLY = 10, PDF_ANNOT_STRIKE_OUT = 11,
+  /// PDF_ANNOT_REDACT = 12, PDF_ANNOT_STAMP = 13, PDF_ANNOT_CARET = 14,
+  /// PDF_ANNOT_INK = 15, PDF_ANNOT_POPUP = 16, PDF_ANNOT_FILE_ATTACHMENT = 17,
+  /// PDF_ANNOT_SOUND = 18, PDF_ANNOT_MOVIE = 19, PDF_ANNOT_WIDGET = 20,
+  /// PDF_ANNOT_SCREEN = 21, PDF_ANNOT_PRINTER_MARK = 22, PDF_ANNOT_TRAP_NET = 23,
+  /// PDF_ANNOT_WATERMARK = 24, PDF_ANNOT_3D = 25, PDF_ANNOT_PROJECTION = 26,
+  /// PDF_ANNOT_RICH_MEDIA = 27
+}
+
+/// 页面链接
+class PdfLink {
+  final PdfRect rect;
+  final String uri;
+
+  const PdfLink({required this.rect, required this.uri});
 }
 
 /// 独立的 PDF 文档实例，支持多文档同时操作
@@ -498,38 +683,44 @@ class PdfDocument {
               if (byte == 0) break;
               bytes.add(byte);
             }
-            chars.add(TextChar(
-              bbox: PdfRect(
-                x0: cChar.bbox.x0,
-                y0: cChar.bbox.y0,
-                x1: cChar.bbox.x1,
-                y1: cChar.bbox.y1,
+            chars.add(
+              TextChar(
+                bbox: PdfRect(
+                  x0: cChar.bbox.x0,
+                  y0: cChar.bbox.y0,
+                  x1: cChar.bbox.x1,
+                  y1: cChar.bbox.y1,
+                ),
+                character: utf8.decode(bytes),
               ),
-              character: utf8.decode(bytes),
-            ));
+            );
           }
 
-          lines.add(TextLine(
-            bbox: PdfRect(
-              x0: cLine.bbox.x0,
-              y0: cLine.bbox.y0,
-              x1: cLine.bbox.x1,
-              y1: cLine.bbox.y1,
+          lines.add(
+            TextLine(
+              bbox: PdfRect(
+                x0: cLine.bbox.x0,
+                y0: cLine.bbox.y0,
+                x1: cLine.bbox.x1,
+                y1: cLine.bbox.y1,
+              ),
+              text: cLine.text.toDartString(),
+              chars: chars,
             ),
-            text: cLine.text.toDartString(),
-            chars: chars,
-          ));
+          );
         }
 
-        blocks.add(TextBlock(
-          bbox: PdfRect(
-            x0: cBlock.bbox.x0,
-            y0: cBlock.bbox.y0,
-            x1: cBlock.bbox.x1,
-            y1: cBlock.bbox.y1,
+        blocks.add(
+          TextBlock(
+            bbox: PdfRect(
+              x0: cBlock.bbox.x0,
+              y0: cBlock.bbox.y0,
+              x1: cBlock.bbox.x1,
+              y1: cBlock.bbox.y1,
+            ),
+            lines: lines,
           ),
-          lines: lines,
-        ));
+        );
       }
 
       return StructuredTextPage(blocks: blocks);
@@ -626,6 +817,121 @@ class PdfDocument {
     } finally {
       // 释放 C 层的 MuPdfImage 和其内部的独立 buffer[cite: 1]
       _lib.imageFree(imagePtr);
+    }
+  }
+
+  /// 获取页面注释列表
+  List<Annotation> getAnnotations(int pageNumber) {
+    if (!isOpen) throw Exception("Document is not open.");
+
+    final annotPagePtr = _lib.pageGetAnnots(_ctx, _doc, pageNumber);
+    if (annotPagePtr == nullptr) {
+      _throwLastError("Failed to get annotations from page $pageNumber");
+    }
+
+    try {
+      final ap = annotPagePtr.ref;
+      final annots = <Annotation>[];
+
+      for (int i = 0; i < ap.annots_count; i++) {
+        final cAnnot = (ap.annots + i).ref;
+        annots.add(
+          Annotation(
+            rect: PdfRect(
+              x0: cAnnot.rect.x0,
+              y0: cAnnot.rect.y0,
+              x1: cAnnot.rect.x1,
+              y1: cAnnot.rect.y1,
+            ),
+            type: cAnnot.type,
+          ),
+        );
+      }
+
+      return annots;
+    } finally {
+      _lib.annotPageFree(annotPagePtr);
+    }
+  }
+
+  /// 添加注释到页面
+  /// [type] 使用 pdf_annot_type 枚举值，如 PDF_ANNOT_HIGHLIGHT = 8
+  void addAnnotation(int pageNumber, int type, PdfRect rect) {
+    if (!isOpen) throw Exception("Document is not open.");
+
+    final cRect = calloc<MuPdfRect>()
+      ..ref.x0 = rect.x0
+      ..ref.y0 = rect.y0
+      ..ref.x1 = rect.x1
+      ..ref.y1 = rect.y1;
+    try {
+      final ret = _lib.pageAddAnnot(_ctx, _doc, pageNumber, type, cRect.ref);
+      if (ret != 0) {
+        _throwLastError("Failed to add annotation to page $pageNumber");
+      }
+    } finally {
+      calloc.free(cRect);
+    }
+  }
+
+  /// 按索引删除注释
+  void deleteAnnotation(int pageNumber, int index) {
+    if (!isOpen) throw Exception("Document is not open.");
+
+    final ret = _lib.pageDeleteAnnot(_ctx, _doc, pageNumber, index);
+    if (ret != 0) {
+      _throwLastError(
+        "Failed to delete annotation at index $index from page $pageNumber",
+      );
+    }
+  }
+
+  /// 获取页面链接列表
+  List<PdfLink> getLinks(int pageNumber) {
+    if (!isOpen) throw Exception("Document is not open.");
+
+    final linkPagePtr = _lib.pageGetLinks(_ctx, _doc, pageNumber);
+    if (linkPagePtr == nullptr) {
+      _throwLastError("Failed to get links from page $pageNumber");
+    }
+
+    try {
+      final lp = linkPagePtr.ref;
+      final links = <PdfLink>[];
+
+      for (int i = 0; i < lp.links_count; i++) {
+        final cLink = (lp.links + i).ref;
+        links.add(
+          PdfLink(
+            rect: PdfRect(
+              x0: cLink.rect.x0,
+              y0: cLink.rect.y0,
+              x1: cLink.rect.x1,
+              y1: cLink.rect.y1,
+            ),
+            uri: cLink.uri.toDartString(),
+          ),
+        );
+      }
+
+      return links;
+    } finally {
+      _lib.linkPageFree(linkPagePtr);
+    }
+  }
+
+  /// 保存文档到文件（持久化注释/链接修改）
+  void save(String filepath) {
+    if (!isOpen) throw Exception("Document is not open.");
+
+    final pathPtr = filepath.toNativeUtf8();
+    try {
+      final ret = _lib.docSave(_ctx, _doc, pathPtr);
+      if (ret != 0) {
+        _throwLastError("Failed to save document to $filepath");
+      }
+    } finally {
+      calloc.free(pathPtr);
     }
   }
 

@@ -51,6 +51,7 @@ class PdfReaderState {
   final Set<String> expandedOutlineIds;
   final double savedScrollOffset;
   final Map<int, StructuredTextPage> stextCache;
+  final Map<int, List<Annotation>> pageAnnotations;
   // final bool isSelectionMode;
   final Map<int, PageTextSelection> pageSelections;
   final bool isHoveringText;
@@ -82,6 +83,7 @@ class PdfReaderState {
     this.expandedOutlineIds = const {},
     this.savedScrollOffset = 0.0,
     this.stextCache = const {},
+    this.pageAnnotations = const {},
     // this.isSelectionMode = false,
     this.pageSelections = const {},
     this.isHoveringText = false,
@@ -116,6 +118,7 @@ class PdfReaderState {
     Set<String>? expandedOutlineIds,
     double? savedScrollOffset,
     Map<int, StructuredTextPage>? stextCache,
+    Map<int, List<Annotation>>? pageAnnotations,
     // bool? isSelectionMode,
     Map<int, PageTextSelection>? pageSelections,
     bool? isHoveringText,
@@ -155,6 +158,7 @@ class PdfReaderState {
       expandedOutlineIds: expandedOutlineIds ?? this.expandedOutlineIds,
       savedScrollOffset: savedScrollOffset ?? this.savedScrollOffset,
       stextCache: stextCache ?? this.stextCache,
+      pageAnnotations: pageAnnotations ?? this.pageAnnotations,
       // isSelectionMode: isSelectionMode ?? this.isSelectionMode,
       pageSelections: pageSelections ?? this.pageSelections,
       isHoveringText: isHoveringText ?? this.isHoveringText,
@@ -814,6 +818,31 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     }
   }
 
+  Future<List<Annotation>?> fetchPageAnnotations(int pageIndex) async {
+    if (state.pageAnnotations.containsKey(pageIndex)) {
+      return state.pageAnnotations[pageIndex];
+    }
+    if (_pdfSendPort == null) return null;
+
+    final responsePort = ReceivePort();
+    _pdfSendPort!.send({
+      'type': 'getPageAnnotations',
+      'pageIndex': pageIndex,
+      'replyPort': responsePort.sendPort,
+    });
+    final result = await responsePort.first;
+    responsePort.close();
+
+    if (result['success'] != true) return null;
+
+    final annots = result['annotations'] as List<Annotation>;
+
+    state = state.copyWith(
+      pageAnnotations: {...state.pageAnnotations, pageIndex: annots},
+    );
+    return annots;
+  }
+
   Future<StructuredTextPage?> fetchStructuredText(int pageIndex) async {
     if (state.stextCache.containsKey(pageIndex)) {
       return state.stextCache[pageIndex];
@@ -831,58 +860,59 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
     if (result['success'] != true) return null;
 
-    final stext = _deserializeStructuredText(
-      result['stext'] as Map<String, dynamic>,
-    );
+    // final stext = _deserializeStructuredText(
+    //   result['stext'] as Map<String, dynamic>,
+    // );
+    final stext = result['stext'] as StructuredTextPage;
     state = state.copyWith(stextCache: {...state.stextCache, pageIndex: stext});
     return stext;
   }
 
-  static StructuredTextPage _deserializeStructuredText(
-    Map<String, dynamic> map,
-  ) {
-    final blocks = (map['blocks'] as List).map((b) {
-      final bm = b as Map<String, dynamic>;
-      final bbox = bm['bbox'] as List;
-      final lines = (bm['lines'] as List).map((l) {
-        final lm = l as Map<String, dynamic>;
-        final lbox = lm['bbox'] as List;
-        final chars = (lm['chars'] as List).map((c) {
-          final cm = c as Map<String, dynamic>;
-          final cbox = cm['bbox'] as List;
-          return TextChar(
-            bbox: PdfRect(
-              x0: (cbox[0] as num).toDouble(),
-              y0: (cbox[1] as num).toDouble(),
-              x1: (cbox[2] as num).toDouble(),
-              y1: (cbox[3] as num).toDouble(),
-            ),
-            character: cm['c'] as String,
-          );
-        }).toList();
-        return TextLine(
-          bbox: PdfRect(
-            x0: (lbox[0] as num).toDouble(),
-            y0: (lbox[1] as num).toDouble(),
-            x1: (lbox[2] as num).toDouble(),
-            y1: (lbox[3] as num).toDouble(),
-          ),
-          text: lm['text'] as String,
-          chars: chars,
-        );
-      }).toList();
-      return TextBlock(
-        bbox: PdfRect(
-          x0: (bbox[0] as num).toDouble(),
-          y0: (bbox[1] as num).toDouble(),
-          x1: (bbox[2] as num).toDouble(),
-          y1: (bbox[3] as num).toDouble(),
-        ),
-        lines: lines,
-      );
-    }).toList();
-    return StructuredTextPage(blocks: blocks);
-  }
+  // static StructuredTextPage _deserializeStructuredText(
+  //   Map<String, dynamic> map,
+  // ) {
+  //   final blocks = (map['blocks'] as List).map((b) {
+  //     final bm = b as Map<String, dynamic>;
+  //     final bbox = bm['bbox'] as List;
+  //     final lines = (bm['lines'] as List).map((l) {
+  //       final lm = l as Map<String, dynamic>;
+  //       final lbox = lm['bbox'] as List;
+  //       final chars = (lm['chars'] as List).map((c) {
+  //         final cm = c as Map<String, dynamic>;
+  //         final cbox = cm['bbox'] as List;
+  //         return TextChar(
+  //           bbox: PdfRect(
+  //             x0: (cbox[0] as num).toDouble(),
+  //             y0: (cbox[1] as num).toDouble(),
+  //             x1: (cbox[2] as num).toDouble(),
+  //             y1: (cbox[3] as num).toDouble(),
+  //           ),
+  //           character: cm['c'] as String,
+  //         );
+  //       }).toList();
+  //       return TextLine(
+  //         bbox: PdfRect(
+  //           x0: (lbox[0] as num).toDouble(),
+  //           y0: (lbox[1] as num).toDouble(),
+  //           x1: (lbox[2] as num).toDouble(),
+  //           y1: (lbox[3] as num).toDouble(),
+  //         ),
+  //         text: lm['text'] as String,
+  //         chars: chars,
+  //       );
+  //     }).toList();
+  //     return TextBlock(
+  //       bbox: PdfRect(
+  //         x0: (bbox[0] as num).toDouble(),
+  //         y0: (bbox[1] as num).toDouble(),
+  //         x1: (bbox[2] as num).toDouble(),
+  //         y1: (bbox[3] as num).toDouble(),
+  //       ),
+  //       lines: lines,
+  //     );
+  //   }).toList();
+  //   return StructuredTextPage(blocks: blocks);
+  // }
 
   Future<void> handleSelectionStart(
     int pageIndex,
@@ -1114,7 +1144,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     }
 
     final textBuf = StringBuffer();
-    final rects = <HighlightRect>[];
+    final rects = <ui.Rect>[];
 
     for (int i = startIdx; i <= endIdx; i++) {
       final line = flatLines[i];
@@ -1132,11 +1162,11 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       final firstChar = line.chars[ci0];
       final lastChar = line.chars[ci1];
       rects.add(
-        HighlightRect(
-          left: TextSelectionAlgorithm.pdfToWidget(firstChar.x0, dpr, scale),
-          top: TextSelectionAlgorithm.pdfToWidget(line.y0, dpr, scale),
-          right: TextSelectionAlgorithm.pdfToWidget(lastChar.x1, dpr, scale),
-          bottom: TextSelectionAlgorithm.pdfToWidget(line.y1, dpr, scale),
+        ui.Rect.fromLTRB(
+          TextSelectionAlgorithm.pdfToWidget(firstChar.x0, dpr, scale),
+          TextSelectionAlgorithm.pdfToWidget(line.y0, dpr, scale),
+          TextSelectionAlgorithm.pdfToWidget(lastChar.x1, dpr, scale),
+          TextSelectionAlgorithm.pdfToWidget(line.y1, dpr, scale),
         ),
       );
     }
@@ -1262,55 +1292,62 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
         replyPort.send({
           'success': true,
-          'data': Uint8List.fromList(rawBytes),
+          'data': rawBytes,
           'width': bitmap.width,
           'height': bitmap.height,
+        });
+      } else if (type == 'getPageAnnotations') {
+        final int pageIndex = message['pageIndex'];
+        final annots = doc.getAnnotations(pageIndex);
+        replyPort.send({
+          'success': true,
+          'annotations': annots,
         });
       } else if (type == 'getStructuredText') {
         final int pageIndex = message['pageIndex'];
         final stext = doc.getStructuredText(pageIndex);
         replyPort.send({
           'success': true,
-          'stext': _serializeStructuredText(stext),
+          'stext': stext,
         });
       }
     });
   }
 
-  static Map<String, dynamic> _serializeStructuredText(
-    StructuredTextPage page,
-  ) {
-    return {
-      'blocks': page.blocks
-          .map(
-            (b) => {
-              'bbox': [b.bbox.x0, b.bbox.y0, b.bbox.x1, b.bbox.y1],
-              'lines': b.lines
-                  .map(
-                    (l) => {
-                      'bbox': [l.bbox.x0, l.bbox.y0, l.bbox.x1, l.bbox.y1],
-                      'text': l.text,
-                      'chars': l.chars
-                          .map(
-                            (c) => {
-                              'bbox': [
-                                c.bbox.x0,
-                                c.bbox.y0,
-                                c.bbox.x1,
-                                c.bbox.y1,
-                              ],
-                              'c': c.character,
-                            },
-                          )
-                          .toList(),
-                    },
-                  )
-                  .toList(),
-            },
-          )
-          .toList(),
-    };
-  }
+  // static Map<String, dynamic> _serializeStructuredText(
+  //   StructuredTextPage page,
+  // ) {
+  //   return {
+  //     'blocks': page.blocks
+  //         .map(
+  //           (b) => {
+  //             'bbox': [b.bbox.x0, b.bbox.y0, b.bbox.x1, b.bbox.y1],
+  //             'lines': b.lines
+  //                 .map(
+  //                   (l) => {
+  //                     'bbox': [l.bbox.x0, l.bbox.y0, l.bbox.x1, l.bbox.y1],
+  //                     'text': l.text,
+  //                     'chars': l.chars
+  //                         .map(
+  //                           (c) => {
+  //                             'bbox': [
+  //                               c.bbox.x0,
+  //                               c.bbox.y0,
+  //                               c.bbox.x1,
+  //                               c.bbox.y1,
+  //                             ],
+  //                             'c': c.character,
+  //                           },
+  //                         )
+  //                         .toList(),
+  //                   },
+  //                 )
+  //                 .toList(),
+  //           },
+  //         )
+  //         .toList(),
+  //   };
+  // }
 }
 
 /// 工作区状态

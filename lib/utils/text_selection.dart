@@ -33,27 +33,10 @@ class CharPosition {
   int get hashCode => Object.hash(blockIndex, lineIndex, charIndex);
 }
 
-/// 高亮矩形，坐标在 widget 逻辑像素空间
-class HighlightRect {
-  final double left;
-  final double top;
-  final double right;
-  final double bottom;
-
-  const HighlightRect({
-    required this.left,
-    required this.top,
-    required this.right,
-    required this.bottom,
-  });
-
-  Rect toRect() => Rect.fromLTRB(left, top, right, bottom);
-}
-
 /// 单页的完整选择状态
 class PageTextSelection {
   final String text;
-  final List<HighlightRect> highlightRects;
+  final List<Rect> highlightRects;
   final CharPosition startPosition;
   final CharPosition endPosition;
   final double scale;

@@ -147,16 +147,16 @@ class PdfPageWidget extends HookConsumerWidget {
     PageTextSelection selection,
     double currentScale,
   ) {
-    List<HighlightRect> displayRects = selection.highlightRects;
+    List<Rect> displayRects = selection.highlightRects;
     if (selection.scale != currentScale && selection.scale > 0) {
       final ratio = currentScale / selection.scale;
       displayRects = displayRects
           .map(
-            (r) => HighlightRect(
-              left: r.left * ratio,
-              top: r.top * ratio,
-              right: r.right * ratio,
-              bottom: r.bottom * ratio,
+            (r) => Rect.fromLTRB(
+              r.left * ratio,
+              r.top * ratio,
+              r.right * ratio,
+              r.bottom * ratio,
             ),
           )
           .toList();
