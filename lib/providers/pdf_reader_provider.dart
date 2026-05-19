@@ -326,6 +326,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         }
 
         final outline = initResult['outline'] as List<OutlineItem>? ?? [];
+        final pageAnnotations =
+            initResult['pageAnnotations'] as Map<int, List<Annotation>>? ?? {};
 
         state = state.copyWith(
           filePath: path,
@@ -338,6 +340,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           originalPagesMaxWidth: originalMaxWidth,
           isLoading: false,
           outline: outline,
+          pageAnnotations: pageAnnotations,
         );
 
         onPageSizeChanged();
@@ -794,16 +797,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     );
   }
 
-  // ─── 文本选择 ──────────────────────────────────────────────────────
-
-  // void toggleSelectionMode() {
-  //   state = state.copyWith(
-  //     isSelectionMode: !state.isSelectionMode,
-  //     clearHoveringPageIndex: true,
-  //     clearSelectingStartPageIndex: true,
-  //   );
-  // }
-
   void setHoverState(int pageIndex, bool isHovering) {
     if (state.hoveringPageIndex != pageIndex && isHovering) {
       state = state.copyWith(
@@ -1251,6 +1244,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         final outline = doc.getOutline();
         pageOriginalSizes = <int, List<int>>{};
 
+        final pageAnnotations = <int, List<Annotation>>{};
         for (int i = 0; i < pageCount; i++) {
           final page = doc.renderPage(
             pageNumber: i,
@@ -1266,7 +1260,9 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
             pageOriginalSizes![i]?[0] ?? 0,
           );
           renderedPixedMap[i] = page.pixels;
+          pageAnnotations[i] = doc.getAnnotations(i);
         }
+
         replyPort.send({
           'success': true,
           'pageCount': pageCount,
@@ -1274,6 +1270,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           'originalMaxWidth': originalMaxWidth,
           'renderedPixedMap': renderedPixedMap,
           'outline': outline,
+          'pageAnnotations': pageAnnotations,
         });
       } else if (type == 'render') {
         if (pageOriginalSizes == null) return;
