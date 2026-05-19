@@ -948,7 +948,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   ) async {
     final startPageIndex = state.selectingStartPageIndex;
     if (startPageIndex == null) return;
-
+    
     if (targetPageIndex == startPageIndex) {
       _buildSinglePageSelection(targetPageIndex, localPosition, dpr);
     } else {
@@ -998,10 +998,11 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       final startBlockY = stext.blocks[sel.startPosition.blockIndex].bbox.y0;
       final endBlockY = stext.blocks[pos.blockIndex].bbox.y0;
       final isDownward = sel.startPosition < pos;
+      
       if (isDownward && endBlockY < startBlockY) return;
       if (!isDownward && endBlockY > startBlockY) return;
     }
-
+    
     final result = _buildSelection(stext, sel.startPosition, pos, dpr, scale);
     state = state.copyWith(
       pageSelections: {...state.pageSelections, pageIndex: result},
@@ -1098,17 +1099,19 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   }
 
   CharPosition _firstCharPosition(List<FlatLine> lines) {
-    // print(stat)
     final line = lines.first;
-    return CharPosition(blockIndex: line.blockIndex, lineIndex: line.lineIndex, charIndex: 0);
+    final char = line.chars.first;
+    return CharPosition(blockIndex: line.blockIndex, lineIndex: line.lineIndex, charIndex: 0, bbox: PdfRect(x0: char.x0, y0: char.y0, x1: char.x1, y1: char.y1));
   }
 
   CharPosition _lastCharPosition(List<FlatLine> lines) {
     final line = lines.last;
+    final char = line.chars.last;
     return CharPosition(
       blockIndex: line.blockIndex,
       lineIndex: line.lineIndex,
       charIndex: line.chars.length - 1,
+      bbox: PdfRect(x0: char.x0, y0: char.y0, x1: char.x1, y1: char.y1),
     );
   }
 

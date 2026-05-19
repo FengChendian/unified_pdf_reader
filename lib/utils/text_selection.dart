@@ -6,17 +6,18 @@ class CharPosition {
   final int blockIndex;
   final int lineIndex;
   final int charIndex;
+  final PdfRect bbox;
 
   const CharPosition({
     required this.blockIndex,
     required this.lineIndex,
     required this.charIndex,
+    required this.bbox,
   });
 
   int compareTo(CharPosition other) {
-    if (blockIndex != other.blockIndex) return blockIndex.compareTo(other.blockIndex);
-    if (lineIndex != other.lineIndex) return lineIndex.compareTo(other.lineIndex);
-    return charIndex.compareTo(other.charIndex);
+    if (bbox.y0 != other.bbox.y0) return bbox.y0.compareTo(other.bbox.y0);
+    return bbox.x0.compareTo(other.bbox.x0);
   }
 
   bool operator <(CharPosition other) => compareTo(other) < 0;
@@ -262,10 +263,12 @@ class TextSelectionAlgorithm {
     final lineIdx = findLineIndex(lines, pdfX, pdfY);
     final line = lines[lineIdx];
     final charIdx = findCharInLine(line, pdfX);
+    final char = line.chars[charIdx];
     return CharPosition(
       blockIndex: line.blockIndex,
       lineIndex: line.lineIndex,
       charIndex: charIdx,
+      bbox: PdfRect(x0: char.x0, y0: char.y0, x1: char.x1, y1: char.y1),
     );
   }
 
