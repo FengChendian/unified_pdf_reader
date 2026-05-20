@@ -619,6 +619,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       if (scrollController.hasClients) {
         _scrollOffset = scrollController.offset;
         _mouseY = event.localPosition.dy;
+        // scrollController.animateTo(_scrollOffset, duration: Duration(microseconds: 100), curve: Curves.bounceIn);
       }
       if (horizontalScrollController.hasClients) {
         _mouseX = event.localPosition.dx;
@@ -1228,7 +1229,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     final childReceivePort = ReceivePort();
     mainSendPort.send([childReceivePort.sendPort]);
 
-    Map<int, List<int>>? pageOriginalSizes;
     final doc = PdfDocument();
 
     childReceivePort.listen((message) {
@@ -1245,7 +1245,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
         final pageCount = doc.pageCount;
         final outline = doc.getOutline();
-        pageOriginalSizes = <int, List<int>>{};
+        final pageOriginalSizes = <int, List<int>>{};
 
         final pageAnnotations = <int, List<Annotation>>{};
         for (int i = 0; i < pageCount; i++) {
@@ -1260,7 +1260,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
           originalMaxWidth = max(
             originalMaxWidth,
-            pageOriginalSizes![i]?[0] ?? 0,
+            pageOriginalSizes[i]?[0] ?? 0,
           );
           renderedPixedMap[i] = page.pixels;
           pageAnnotations[i] = doc.getAnnotations(i);
@@ -1276,7 +1276,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           'pageAnnotations': pageAnnotations,
         });
       } else if (type == 'render') {
-        if (pageOriginalSizes == null) return;
+        // if (pageOriginalSizes == null) return;
 
         final int index = message['pageIndex'];
         final double scale = (message['scale'] ?? 1.0);

@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:unified_pdf_reader/widgets/smooth_scroller.dart';
 import 'package:window_manager/window_manager.dart';
 import '../utils/cache_list.dart';
 import '../constants/app_colors.dart';
@@ -44,7 +45,7 @@ class PdfReaderPage extends HookConsumerWidget {
       return null;
     }, [activeTabId]);
 
-    final scrollController = useScrollController();
+    final scrollController = useSmoothScrollController();
     final horizontalScrollController = useScrollController();
 
     // Scroll listener: delegates to active doc's onScrollChanged
