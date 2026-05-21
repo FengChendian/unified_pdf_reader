@@ -198,7 +198,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   double _lastDevicePixelRatio = 1.0;
 
   static const double _separatorHeight = 10.0;
-  static const double _highResScaleFactor = 5.0;
+  static const double _highResScaleFactor = 3.0;
 
   static const int _highResWindowRadius = 2;
   static const Duration _highResRenderInterval = Duration(milliseconds: 100);
@@ -532,24 +532,15 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         // _highResRenderQueu
         if (state.highResPageImages.containsKey(pageIndex)) continue;
 
-        // final int start = (state.currentPage - _highResWindowRadius).clamp(
-        //   0,
-        //   state.totalPages - 1,
-        // );
-        // final int end = (state.currentPage + _highResWindowRadius).clamp(
-        //   0,
-        //   state.totalPages - 1,
-        // );
-        // if (pageIndex < start || pageIndex > end) continue;
-
-        // _currentlyRenderingPage = pageIndex;
         try {
           final renderScale = _highResScaleFactor * _lastDevicePixelRatio;
           final result = await _renderPage(pageIndex, scale: renderScale);
           if (result == null || result['success'] != true) continue;
 
+          final buffer =
+              (result['data'] as TransferableTypedData).materialize();
           final img = await _decodeImageFromPixels(
-            result['data'],
+            Uint8List.view(buffer),
             result['width'],
             result['height'],
           );
@@ -813,6 +804,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   }
 
   Future<List<Annotation>?> fetchPageAnnotations(int pageIndex) async {
+    // print('fetching annotations for page $pageIndex');
     if (state.pageAnnotations.containsKey(pageIndex)) {
       return state.pageAnnotations[pageIndex];
     }
@@ -834,6 +826,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     state = state.copyWith(
       pageAnnotations: {...state.pageAnnotations, pageIndex: annots},
     );
+    
     return annots;
   }
 
@@ -1249,14 +1242,14 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
         final pageAnnotations = <int, List<Annotation>>{};
         for (int i = 0; i < pageCount; i++) {
-          final page = doc.renderPage(
+          final page = doc.renderPageNoAnnot(
             pageNumber: i,
             zoom: 100.0,
             rotate: 0.0,
-            includeAlpha: false,
+            includeAlpha: true,
           );
 
-          pageOriginalSizes![i] = [page.width, page.height];
+          pageOriginalSizes[i] = [page.width, page.height];
 
           originalMaxWidth = max(
             originalMaxWidth,
@@ -1265,7 +1258,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           renderedPixedMap[i] = page.pixels;
           pageAnnotations[i] = doc.getAnnotations(i);
         }
-
+        // print(pageAnnotations[0]![0].rect.x0);
         replyPort.send({
           'success': true,
           'pageCount': pageCount,
@@ -1281,18 +1274,18 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         final int index = message['pageIndex'];
         final double scale = (message['scale'] ?? 1.0);
 
-        final bitmap = doc.renderPage(
+        final bitmap = doc.renderPageNoAnnot(
           pageNumber: index,
           zoom: scale * 100,
           rotate: 0.0,
-          includeAlpha: false,
+          includeAlpha: true,
         );
 
         final rawBytes = bitmap.pixels;
 
         replyPort.send({
           'success': true,
-          'data': rawBytes,
+          'data': TransferableTypedData.fromList([rawBytes]),
           'width': bitmap.width,
           'height': bitmap.height,
         });

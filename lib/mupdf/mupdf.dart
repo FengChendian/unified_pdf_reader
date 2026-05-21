@@ -156,6 +156,15 @@ class MuPdfLibrary {
     int,
   )
   pageRender;
+  late final Pointer<MuPdfImage> Function(
+    Pointer<MuPdfContextOpaque>,
+    Pointer<MuPdfDocumentOpaque>,
+    int,
+    double,
+    double,
+    int,
+  )
+  pageRenderNoAnnot;
   late final void Function(
     Pointer<MuPdfContextOpaque>,
     Pointer<MuPdfDocumentOpaque>,
@@ -271,6 +280,26 @@ class MuPdfLibrary {
             int,
           )
         >('mupdf_page_render');
+
+    pageRenderNoAnnot = _dylib
+        .lookupFunction<
+          Pointer<MuPdfImage> Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            Int32,
+            Float,
+            Float,
+            Int32,
+          ),
+          Pointer<MuPdfImage> Function(
+            Pointer<MuPdfContextOpaque>,
+            Pointer<MuPdfDocumentOpaque>,
+            int,
+            double,
+            double,
+            int,
+          )
+        >('mupdf_page_render_no_annot');
 
     docClose = _dylib
         .lookupFunction<
@@ -816,6 +845,87 @@ class PdfDocument {
       );
     } finally {
       // 释放 C 层的 MuPdfImage 和其内部的独立 buffer[cite: 1]
+      _lib.imageFree(imagePtr);
+    }
+  }
+
+  /// 渲染指定页面（不含注释），获取独立的图像数据
+  RenderedPage renderPageNoAnnot({
+    required int pageNumber,
+    double zoom = 100.0,
+    double rotate = 0.0,
+    bool includeAlpha = false,
+  }) {
+    if (!isOpen) throw Exception("Document is not open.");
+
+    final imagePtr = _lib.pageRenderNoAnnot(
+      _ctx,
+      _doc,
+      pageNumber,
+      zoom,
+      rotate,
+      includeAlpha ? 1 : 0,
+    );
+
+    if (imagePtr == nullptr) {
+      _throwLastError("Failed to render page $pageNumber (no annot)");
+    }
+
+    try {
+      final img = imagePtr.ref;
+
+      final width = img.width;
+      final height = img.height;
+      final stride = img.stride;
+      final components = img.components;
+
+      final bytesPerPixel = components;
+      final dataSize = stride * height;
+
+      final outputStride = width * 4;
+      final outputSize = outputStride * height;
+      final rgbaPixels = Uint8List(outputSize);
+
+      final cPixels = img.buffer.asTypedList(dataSize);
+
+      final Uint32List rgbaUint32 = rgbaPixels.buffer.asUint32List();
+      final int uint32OutputStride = outputStride >> 2;
+
+      if (components == 4) {
+        final Uint32List srcUint32 = cPixels.buffer.asUint32List();
+        final int uint32SrcStride = stride >> 2;
+
+        for (int y = 0; y < height; y++) {
+          rgbaUint32.setRange(
+            y * uint32OutputStride,
+            y * uint32OutputStride + width,
+            srcUint32,
+            y * uint32SrcStride,
+          );
+        }
+      } else {
+        for (int y = 0; y < height; y++) {
+          int srcRowBase = y * stride;
+          int dstRowBase = y * uint32OutputStride;
+          for (int x = 0; x < width; x++) {
+            final int src = srcRowBase + x * bytesPerPixel;
+            rgbaUint32[dstRowBase + x] =
+                0xFF000000 |
+                (cPixels[src + 2] << 16) |
+                (cPixels[src + 1] << 8) |
+                cPixels[src];
+          }
+        }
+      }
+
+      return RenderedPage(
+        width: width,
+        height: height,
+        stride: outputStride,
+        components: 4,
+        pixels: rgbaPixels,
+      );
+    } finally {
       _lib.imageFree(imagePtr);
     }
   }

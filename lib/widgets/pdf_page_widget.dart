@@ -5,6 +5,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../providers/pdf_reader_provider.dart';
 import '../mupdf/mupdf.dart';
 import '../utils/text_selection.dart';
+import 'highlight_painter.dart';
 import 'selection_highlight_painter.dart';
 
 class PdfPageWidget extends HookConsumerWidget {
@@ -53,6 +54,43 @@ class PdfPageWidget extends HookConsumerWidget {
           )
         : null;
 
+    final pageAnnotations = activeTabId != null
+        ? ref.watch(
+            pdfReaderProvider(activeTabId).select(
+              (state) => state.pageAnnotations[pageIndex],
+            ),
+          )
+        : null;
+
+    final annotationHighlightRects = useMemoized(() {
+      if (pageAnnotations == null) return <Rect>[];
+      return pageAnnotations
+          .where((a) => a.type == 8) // PDF_ANNOT_HIGHLIGHT
+          .map((a) => Rect.fromLTRB(
+                TextSelectionAlgorithm.pdfToWidget(
+                  a.rect.x0,
+                  devicePixelRatio,
+                  scale,
+                ),
+                TextSelectionAlgorithm.pdfToWidget(
+                  a.rect.y0,
+                  devicePixelRatio,
+                  scale,
+                ),
+                TextSelectionAlgorithm.pdfToWidget(
+                  a.rect.x1,
+                  devicePixelRatio,
+                  scale,
+                ),
+                TextSelectionAlgorithm.pdfToWidget(
+                  a.rect.y1,
+                  devicePixelRatio,
+                  scale,
+                ),
+              ))
+          .toList();
+    }, [pageAnnotations, scale, devicePixelRatio]);
+
     final isHoveringText = useState(true);
 
     return _buildPageContent(
@@ -64,6 +102,7 @@ class PdfPageWidget extends HookConsumerWidget {
       devicePixelRatio,
       pageImage,
       selection,
+      annotationHighlightRects,
       isHoveringText,
     );
   }
@@ -77,6 +116,7 @@ class PdfPageWidget extends HookConsumerWidget {
     double devicePixelRatio,
     ui.Image? pageImage,
     PageTextSelection? selection,
+    List<Rect> annotationHighlightRects,
     ValueNotifier<bool> isHoveringText,
   ) {
     if (originalWidth == 0 || originalHeight == 0) {
@@ -95,18 +135,25 @@ class PdfPageWidget extends HookConsumerWidget {
     Widget pageContent = SizedBox(
       width: pageWidth,
       height: pageHeight,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: RawImage(
-              image: pageImage,
-              fit: BoxFit.fill,
-              filterQuality: FilterQuality.medium,
+      child: Container(
+        color: Colors.white,  
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: RawImage(
+                image: pageImage,
+                fit: BoxFit.fill,
+                filterQuality: FilterQuality.medium,
+              ),
             ),
-          ),
-          if (selection != null && selection.highlightRects.isNotEmpty)
-            _buildSelectionHighlight(selection, scale),
-        ],
+            if (annotationHighlightRects.isNotEmpty)
+              CustomPaint(
+                painter: HighlightPainter(rects: annotationHighlightRects),
+              ),
+            if (selection != null && selection.highlightRects.isNotEmpty)
+              _buildSelectionHighlight(selection, scale),
+          ],
+        ),
       ),
     );
 

@@ -511,17 +511,19 @@ class PdfReaderPage extends HookConsumerWidget {
                 Positioned(
                   right: 16,
                   bottom: 16,
-                  child: PageIndicator(activeTabId: activeTabId),
+                  child: RepaintBoundary(child: PageIndicator(activeTabId: activeTabId)),
                 ),
               Positioned(
                 right: 0,
                 top: 0,
                 bottom: 0,
-                child: CustomScrollbar(
-                  controller: scrollController,
-                  thickness: 6,
-                  radius: const Radius.circular(3),
-                  color: const Color(0xFF9CA3AF),
+                child: RepaintBoundary(
+                  child: CustomScrollbar(
+                    controller: scrollController,
+                    thickness: 6,
+                    radius: const Radius.circular(3),
+                    color: const Color(0xFF9CA3AF),
+                  ),
                 ),
               ),
             ],
@@ -901,6 +903,7 @@ class PdfReaderPage extends HookConsumerWidget {
               behavior: const ScrollBehavior().copyWith(scrollbars: false),
               child: CustomScrollView(
                 controller: scrollController,
+                // cacheExtent: 8000,
                 physics: (isCtrlPressed)
                     ? const NeverScrollableScrollPhysics()
                     : const ClampingScrollPhysics(),
@@ -911,9 +914,11 @@ class PdfReaderPage extends HookConsumerWidget {
                         return const SizedBox(height: 10);
                       }
                       final i = index ~/ 2;
-                      return PdfPageWidget(
-                        key: ValueKey('page_${fileHash}_$i'),
-                        pageIndex: i,
+                      return RepaintBoundary(
+                        child: PdfPageWidget(
+                          key: ValueKey('page_${fileHash}_$i'),
+                          pageIndex: i,
+                        ),
                       );
                     }, childCount: totalPages * 2),
                     itemExtents: heightsOnDevice,

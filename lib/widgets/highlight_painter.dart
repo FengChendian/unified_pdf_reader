@@ -7,15 +7,16 @@ class HighlightPainter extends CustomPainter {
 
   const HighlightPainter({
     required this.rects,
-    this.color = const Color(0x55FFEB3B),
-    this.borderRadius = 2.0,
+    this.color = const Color.fromARGB(99, 102, 184, 255),
+    this.borderRadius = 6.0,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = color
-      ..style = PaintingStyle.fill;
+      ..style = PaintingStyle.fill
+      ..blendMode = BlendMode.multiply; // 乘法混合，叠加高亮颜色
 
     for (final rect in rects) {
       canvas.drawRRect(

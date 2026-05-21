@@ -77,7 +77,7 @@ class SmoothScrollPosition extends ScrollPositionWithSingleContext {
     final dt = (timestamp - _lastTimeStamp!).inMicroseconds / 1e6;
     _lastTimeStamp = timestamp;
 
-    if (dt == 0) return;
+    if (dt <= 0) return;
 
     if (_velocity.abs() < 1.0) {
       _stopSimulation();
