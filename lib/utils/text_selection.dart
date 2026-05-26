@@ -111,35 +111,39 @@ class TextSelectionAlgorithm {
         final chars = <FlatChar>[];
         for (int ci = 0; ci < line.chars.length; ci++) {
           final c = line.chars[ci];
-          chars.add(FlatChar(
+          chars.add(
+            FlatChar(
+              blockIndex: bi,
+              lineIndex: li,
+              charIndex: ci,
+              x0: c.bbox.x0,
+              y0: c.bbox.y0,
+              x1: c.bbox.x1,
+              y1: c.bbox.y1,
+              character: c.character,
+            ),
+          );
+        }
+        lines.add(
+          FlatLine(
             blockIndex: bi,
             lineIndex: li,
-            charIndex: ci,
-            x0: c.bbox.x0,
-            y0: c.bbox.y0,
-            x1: c.bbox.x1,
-            y1: c.bbox.y1,
-            character: c.character,
-          ));
-        }
-        lines.add(FlatLine(
-          blockIndex: bi,
-          lineIndex: li,
-          x0: line.bbox.x0,
-          x1: line.bbox.x1,
-          y0: line.bbox.y0,
-          y1: line.bbox.y1,
-          chars: chars,
-        ));
+            x0: line.bbox.x0,
+            x1: line.bbox.x1,
+            y0: line.bbox.y0,
+            y1: line.bbox.y1,
+            chars: chars,
+          ),
+        );
       }
     }
-    // MuPDF 已按阅读顺序输出，但显式按 y0 排序以防万一
+    // 实际上，MuPDF 已按阅读顺序输出，此处用作空间坐标
     lines.sort((a, b) => a.y0.compareTo(b.y0));
     return lines;
   }
-  
+
   /// 二分查找包含 [pdfY] 的行，结合 [pdfX] 消歧义（多栏/多块），未命中则返回最近行。
-  static int findLineIndex(List<FlatLine> lines, double pdfX, double pdfY) {
+  static int? findLineIndex(List<FlatLine> lines, double pdfX, double pdfY) {
     if (lines.isEmpty) return 0;
 
     int lo = 0, hi = lines.length;
@@ -154,26 +158,30 @@ class TextSelectionAlgorithm {
 
     // 二分查找后只需检查 lo 和 lo-1，同 Y 展开由 _collectSameYRange 完成
     if (lo < lines.length && lines[lo].y0 <= pdfY && pdfY <= lines[lo].y1) {
-      
       final candidates = _collectSameYRange(lines, lo, pdfY);
+
       return _pickBestByX(lines, candidates, pdfX);
     }
     if (lo > 0 && lines[lo - 1].y0 <= pdfY && pdfY <= lines[lo - 1].y1) {
       final candidates = _collectSameYRange(lines, lo - 1, pdfY);
+      // print("No Y match for pdfY=$pdfY, candidates are lo=$lo and lo-1=${lo - 1}");
+      // print(_pickBestByX(lines, candidates, pdfX));
       return _pickBestByX(lines, candidates, pdfX);
     }
+
     // print(" No exact Y match for pdfY=$pdfY, candidates are lo=$lo and lo-1=${lo - 1}");
     // 无精确 Y 匹配 — 最近行，同时考虑同 y0 的其他 block 行
     if (lo >= lines.length) return lines.length - 1;
     final candidates = <int>[];
+    // print("No Y match for pdfY=$pdfY, candidates are lo=$lo and lo-1=${lo - 1}");
     if (lo < lines.length) candidates.add(lo);
     if (lo > 0) candidates.add(lo - 1);
-    // 展开同 y0 的行（不同 block 可能在同一行）
+    // 展开所有与候选行垂直范围重叠的行（不同 block 可能在同一行）
     for (final c in candidates.toList()) {
-      for (int i = c + 1; i < lines.length && lines[i].y0 == lines[c].y0; i++) {
+      for (int i = c + 1; i < lines.length && lines[i].y0 <= lines[c].y1; i++) {
         candidates.add(i);
       }
-      for (int i = c - 1; i >= 0 && lines[i].y0 == lines[c].y0; i--) {
+      for (int i = c - 1; i >= 0 && lines[i].y1 >= lines[c].y0; i--) {
         candidates.add(i);
       }
     }
@@ -181,7 +189,11 @@ class TextSelectionAlgorithm {
   }
 
   /// 收集与 lines[idx] 相同 Y 范围（y0..y1 重叠）的所有行
-  static List<int> _collectSameYRange(List<FlatLine> lines, int idx, double pdfY) {
+  static List<int> _collectSameYRange(
+    List<FlatLine> lines,
+    int idx,
+    double pdfY,
+  ) {
     final result = <int>[idx];
     // 向前找同 Y 范围的行
     for (int i = idx + 1; i < lines.length; i++) {
@@ -199,18 +211,32 @@ class TextSelectionAlgorithm {
         break;
       }
     }
+    // print("Candidates at pdfY=$pdfY: ${result.map((i) => "idx=$i x0=${lines[i].x0} x1=${lines[i].x1}").join("; ")}");
     return result;
   }
 
   /// 在候选行中选择 X 距离最近的行
-  static int _pickBestByX(List<FlatLine> lines, List<int> indices, double pdfX) {
-    int best = indices.first;
-    double bestDist = _horizontalDist(lines[best], pdfX);
-    for (int j = 1; j < indices.length; j++) {
-      final d = _horizontalDist(lines[indices[j]], pdfX);
-      if (d < bestDist) {
-        bestDist = d;
-        best = indices[j];
+  static int? _pickBestByX(
+    List<FlatLine> lines,
+    List<int> indices,
+    double pdfX,
+  ) {
+    // int best = indices.first;
+    // final firstLine = lines[best];
+  
+    // double bestDist = _horizontalDist(firstLine, pdfX);
+    // print("Candidates at pdfY: ${indices.map((i) => "idx=$i x0=${lines[i].x0} x1=${lines[i].x1}").join("; ")}");
+    double bestDist = double.infinity;
+    int? best;
+    for (int j = 0; j < indices.length; j++) {
+      final line = lines[indices[j]];
+      // print("Candidate line idx=${indices[j]} x0=${line.x0} x1=${line.x1} dist=${_horizontalDist(line, pdfX)}, pdfX=$pdfX");
+      if (pdfX >= line.x0 && pdfX <= line.x1) {
+        final d = _horizontalDist(lines[indices[j]], pdfX);
+        if (d < bestDist) {
+          bestDist = d;
+          best = indices[j];
+        }
       }
     }
     return best;
@@ -255,15 +281,21 @@ class TextSelectionAlgorithm {
   }
 
   /// 给定 PDF 坐标，返回最近的字符位置
-  static CharPosition findNearestChar(
+  static CharPosition? findNearestChar(
     List<FlatLine> lines,
     double pdfX,
     double pdfY,
   ) {
     final lineIdx = findLineIndex(lines, pdfX, pdfY);
+    // print("findNearestChar: pdfX=$pdfX, pdfY=$pdfY => lineIdx=$lineIdx");
+    if (lineIdx == null) {
+      // print("findNearestChar: No line found for pdfX=$pdfX, pdfY=$pdfY");
+      return null;
+    }
     final line = lines[lineIdx];
     final charIdx = findCharInLine(line, pdfX);
     final char = line.chars[charIdx];
+    // print("findNearestChar: pdfX=$pdfX, pdfY=$pdfY => lineIdx=$lineIdx, charIdx=$charIdx, char='${char.character}'");
     return CharPosition(
       blockIndex: line.blockIndex,
       lineIndex: line.lineIndex,
@@ -273,7 +305,11 @@ class TextSelectionAlgorithm {
   }
 
   /// 在已排序的 FlatLine 列表中查找匹配 [blockIndex] 和 [lineIndex] 的索引
-  static int findFlatLineIndex(List<FlatLine> lines, int blockIndex, int lineIndex) {
+  static int findFlatLineIndex(
+    List<FlatLine> lines,
+    int blockIndex,
+    int lineIndex,
+  ) {
     for (int i = 0; i < lines.length; i++) {
       final l = lines[i];
       if (l.blockIndex == blockIndex && l.lineIndex == lineIndex) return i;

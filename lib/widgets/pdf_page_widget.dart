@@ -227,6 +227,11 @@ class PdfPageWidget extends HookConsumerWidget {
     final pdfX = TextSelectionAlgorithm.widgetToPdf(localX, dpr, scale);
     final pdfY = TextSelectionAlgorithm.widgetToPdf(localY, dpr, scale);
     final lineIdx = TextSelectionAlgorithm.findLineIndex(lines, pdfX, pdfY);
+    // print("Hover at localX=$localX, localY=$localY => pdfX=$pdfX, pdfY=$pdfY => lineIdx=$lineIdx");
+    if (lineIdx == null) {
+      isHoveringText.value = false;
+      return;
+    }
     final line = lines[lineIdx];
     isHoveringText.value =
         TextSelectionAlgorithm.isPointInLineXRange(line, pdfX) &&

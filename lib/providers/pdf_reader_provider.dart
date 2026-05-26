@@ -790,6 +790,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   }
 
   void setHoverState(int pageIndex, bool isHovering) {
+    // print('setHoverState: pageIndex=${state.hoveringPageIndex}, isHovering=$isHovering');
     if (state.hoveringPageIndex != pageIndex && isHovering) {
       state = state.copyWith(
         isHoveringText: true,
@@ -921,6 +922,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       scale,
     );
     final pos = TextSelectionAlgorithm.findNearestChar(lines, pdfX, pdfY);
+    if (pos == null) return;
     state = state.copyWith(
       selectingStartPageIndex: pageIndex,
       pageSelections: {
@@ -986,7 +988,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     );
     final pos = TextSelectionAlgorithm.findNearestChar(lines, pdfX, pdfY);
     // print('Selection pos: block ${pos.blockIndex}, line ${pos.lineIndex}, char ${pos.charIndex}');
-    if (pos == sel.endPosition) return;
+    if (pos == sel.endPosition || pos == null) return;
 
     if (sel.startPosition.blockIndex != pos.blockIndex) {
       final startBlockY = stext.blocks[sel.startPosition.blockIndex].bbox.y0;
@@ -999,7 +1001,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     
     final result = _buildSelection(stext, sel.startPosition, pos, dpr, scale);
     state = state.copyWith(
-      pageSelections: {...state.pageSelections, pageIndex: result},
+      pageSelections: {pageIndex: result},
     );
   }
 
@@ -1025,23 +1027,24 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
     final newSelections = <int, PageTextSelection>{};
 
-    for (int pi = fromPage; pi <= toPage; pi++) {
-      final stext = state.stextCache[pi];
+    for (int pageIndex = fromPage; pageIndex <= toPage; pageIndex++) {
+      final stext = state.stextCache[pageIndex];
       if (stext == null) continue;
       final lines = TextSelectionAlgorithm.flattenPage(stext);
-      if (pi == startPage) {
+      if (pageIndex == startPage) {
         final boundaryPos = goingDown
             ? _lastCharPosition(lines)
             : _firstCharPosition(lines);
-        newSelections[pi] = _buildSelection(
+        newSelections[pageIndex] = _buildSelection(
           stext,
           startSel.startPosition,
           boundaryPos,
           dpr,
           scale,
         );
-      } else if (pi == endPage) {
+      } else if (pageIndex == endPage) {
         // final lines = TextSelectionAlgorithm.flattenPage(stext);
+        
         final pdfX = TextSelectionAlgorithm.widgetToPdf(
           endLocalPosition.dx,
           dpr,
@@ -1052,10 +1055,13 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           dpr,
           scale,
         );
-        final pointerPos = TextSelectionAlgorithm.findNearestChar(lines, pdfX, pdfY);
+        final pointerPos = TextSelectionAlgorithm.findNearestChar(lines, pdfX, pdfY) ?? state.pageSelections[endPage]?.endPosition;
+        if (pointerPos == null) return;
         final firstPos = goingDown
             ? _firstCharPosition(lines)
             : _lastCharPosition(lines);
+
+        setHoverState(pageIndex, true); /// 拖动onPan的时候onHover会失效，所以在这里补上hover状态，保持被拖动页的hover高亮
 
         if (firstPos.blockIndex != pointerPos.blockIndex) {
           final startBlockY = stext.blocks[firstPos.blockIndex].bbox.y0;
@@ -1066,7 +1072,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
           if (!goingDown && endBlockY > startBlockY) return;
         }
 
-        newSelections[pi] = _buildSelection(
+        newSelections[pageIndex] = _buildSelection(
           stext,
           firstPos,
           pointerPos,
@@ -1077,7 +1083,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         
         final startPos = _firstCharPosition(lines);
         final endPos = _lastCharPosition(lines);
-        newSelections[pi] = _buildSelection(
+        newSelections[pageIndex] = _buildSelection(
           stext,
           startPos,
           endPos,
@@ -1088,7 +1094,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     }
 
     state = state.copyWith(
-      pageSelections: {...state.pageSelections, ...newSelections},
+      pageSelections: newSelections,
     );
   }
 
@@ -1116,49 +1122,46 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     double dpr,
     double scale,
   ) {
-    final flatLines = TextSelectionAlgorithm.flattenPage(stext);
-
-    int startIdx = TextSelectionAlgorithm.findFlatLineIndex(
-      flatLines, a.blockIndex, a.lineIndex,
-    );
-    int endIdx = TextSelectionAlgorithm.findFlatLineIndex(
-      flatLines, b.blockIndex, b.lineIndex,
-    );
-
-    int cStart, cEnd;
-    if (startIdx <= endIdx) {
-      cStart = a.charIndex; cEnd = b.charIndex;
-    } else {
-      cStart = b.charIndex; cEnd = a.charIndex;
-      final temp = startIdx; startIdx = endIdx; endIdx = temp;
+    bool isBefore(CharPosition x, CharPosition y) {
+      if (x.blockIndex != y.blockIndex) return x.blockIndex < y.blockIndex;
+      if (x.lineIndex != y.lineIndex) return x.lineIndex < y.lineIndex;
+      return x.charIndex <= y.charIndex;
     }
+    final startPos = isBefore(a, b) ? a : b;
+    final endPos = isBefore(a, b) ? b : a;
 
     final textBuf = StringBuffer();
     final rects = <ui.Rect>[];
 
-    for (int i = startIdx; i <= endIdx; i++) {
-      final line = flatLines[i];
-      if (line.chars.isEmpty) continue;
+    for (int bi = startPos.blockIndex; bi <= endPos.blockIndex; bi++) {
+      final block = stext.blocks[bi];
+      final lineStart = (bi == startPos.blockIndex) ? startPos.lineIndex : 0;
+      final lineEnd = (bi == endPos.blockIndex) ? endPos.lineIndex : block.lines.length - 1;
 
-      final ci0 = (i == startIdx) ? cStart : 0;
-      final ci1 = (i == endIdx) ? cEnd : line.chars.length - 1;
+      for (int li = lineStart; li <= lineEnd; li++) {
+        final line = block.lines[li];
+        if (line.chars.isEmpty) continue;
 
-      for (int ci = ci0; ci <= ci1; ci++) {
-        textBuf.write(line.chars[ci].character);
+        final ci0 = (bi == startPos.blockIndex && li == startPos.lineIndex) ? startPos.charIndex : 0;
+        final ci1 = (bi == endPos.blockIndex && li == endPos.lineIndex) ? endPos.charIndex : line.chars.length - 1;
+
+        for (int ci = ci0; ci <= ci1; ci++) {
+          textBuf.write(line.chars[ci].character);
+        }
+
+        if (bi != endPos.blockIndex || li != endPos.lineIndex) {
+          textBuf.write('\n');
+        }
+
+        rects.add(
+          ui.Rect.fromLTRB(
+            TextSelectionAlgorithm.pdfToWidget(line.chars[ci0].bbox.x0, dpr, scale),
+            TextSelectionAlgorithm.pdfToWidget(line.bbox.y0, dpr, scale),
+            TextSelectionAlgorithm.pdfToWidget(line.chars[ci1].bbox.x1, dpr, scale),
+            TextSelectionAlgorithm.pdfToWidget(line.bbox.y1, dpr, scale),
+          ),
+        );
       }
-
-      if (i < endIdx) textBuf.write('\n');
-
-      final firstChar = line.chars[ci0];
-      final lastChar = line.chars[ci1];
-      rects.add(
-        ui.Rect.fromLTRB(
-          TextSelectionAlgorithm.pdfToWidget(firstChar.x0, dpr, scale),
-          TextSelectionAlgorithm.pdfToWidget(line.y0, dpr, scale),
-          TextSelectionAlgorithm.pdfToWidget(lastChar.x1, dpr, scale),
-          TextSelectionAlgorithm.pdfToWidget(line.y1, dpr, scale),
-        ),
-      );
     }
 
     return PageTextSelection(

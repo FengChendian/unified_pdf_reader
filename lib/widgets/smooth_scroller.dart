@@ -44,9 +44,9 @@ class SmoothScrollPosition extends ScrollPositionWithSingleContext {
 
   // 物理参数配置
   // 阻尼系数 (Drag)：表示 1 秒后剩余的速度比例。0.01 表示 1秒后几乎停下。值越大滑得越远。
-  static const double dampling = 0.004;
+  static const double dampling = 0.001;
   // 冲量敏感度：每次滚轮事件转化为速度的乘数。
-  static const double impulseMultiplier = 20.0;
+  static const double impulseMultiplier = 15.0;
   // static const double maxVelocity = 4000;
   static final double _lnDrag = log(dampling);
   static final double _invLnDrag = 1.0 / _lnDrag; // 预计算倒数，变除法为乘法
