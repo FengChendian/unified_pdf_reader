@@ -1033,8 +1033,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       final lines = TextSelectionAlgorithm.flattenPage(stext);
       if (pageIndex == startPage) {
         final boundaryPos = goingDown
-            ? _lastCharPosition(lines)
-            : _firstCharPosition(lines);
+            ? _lastCharPosition(stext)
+            : _firstCharPosition(stext);
         newSelections[pageIndex] = _buildSelection(
           stext,
           startSel.startPosition,
@@ -1058,19 +1058,19 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         final pointerPos = TextSelectionAlgorithm.findNearestChar(lines, pdfX, pdfY) ?? state.pageSelections[endPage]?.endPosition;
         if (pointerPos == null) return;
         final firstPos = goingDown
-            ? _firstCharPosition(lines)
-            : _lastCharPosition(lines);
-
+            ? _firstCharPosition(stext)
+            : _lastCharPosition(stext);
+        // print(firstPos.blockIndex);
         setHoverState(pageIndex, true); /// 拖动onPan的时候onHover会失效，所以在这里补上hover状态，保持被拖动页的hover高亮
 
-        if (firstPos.blockIndex != pointerPos.blockIndex) {
-          final startBlockY = stext.blocks[firstPos.blockIndex].bbox.y0;
-          final endBlockY = stext.blocks[pointerPos.blockIndex].bbox.y0;
-          // final isDownward = boundaryPos < pos;
+        // if (firstPos.blockIndex != pointerPos.blockIndex) {
+        //   final startBlockY = stext.blocks[firstPos.blockIndex].bbox.y0;
+        //   final endBlockY = stext.blocks[pointerPos.blockIndex].bbox.y0;
+        //   // final isDownward = boundaryPos < pos;
 
-          if (goingDown && endBlockY < startBlockY) return;
-          if (!goingDown && endBlockY > startBlockY) return;
-        }
+        //   if (goingDown && endBlockY < startBlockY) return;
+        //   if (!goingDown && endBlockY > startBlockY) return;
+        // }
 
         newSelections[pageIndex] = _buildSelection(
           stext,
@@ -1081,8 +1081,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
         );
       } else {
         
-        final startPos = _firstCharPosition(lines);
-        final endPos = _lastCharPosition(lines);
+        final startPos = _firstCharPosition(stext);
+        final endPos = _lastCharPosition(stext);
         newSelections[pageIndex] = _buildSelection(
           stext,
           startPos,
@@ -1098,20 +1098,29 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     );
   }
 
-  CharPosition _firstCharPosition(List<FlatLine> lines) {
-    final line = lines.first;
+  CharPosition _firstCharPosition(StructuredTextPage stext) {
+    final block = stext.blocks.first;
+    final line = block.lines.first;
     final char = line.chars.first;
-    return CharPosition(blockIndex: line.blockIndex, lineIndex: line.lineIndex, charIndex: 0, bbox: PdfRect(x0: char.x0, y0: char.y0, x1: char.x1, y1: char.y1));
+    return CharPosition(
+      blockIndex: 0,
+      lineIndex: 0,
+      charIndex: 0,
+      bbox: PdfRect(x0: char.bbox.x0, y0: char.bbox.y0, x1: char.bbox.x1, y1: char.bbox.y1),
+    );
   }
 
-  CharPosition _lastCharPosition(List<FlatLine> lines) {
-    final line = lines.last;
+  CharPosition _lastCharPosition(StructuredTextPage stext) {
+    final lastBlockIndex = stext.blocks.length - 1;
+    final lastLine = stext.blocks.last.lines;
+    final lastLineIndex = lastLine.length - 1;
+    final line = lastLine.last;
     final char = line.chars.last;
     return CharPosition(
-      blockIndex: line.blockIndex,
-      lineIndex: line.lineIndex,
+      blockIndex: lastBlockIndex,
+      lineIndex: lastLineIndex,
       charIndex: line.chars.length - 1,
-      bbox: PdfRect(x0: char.x0, y0: char.y0, x1: char.x1, y1: char.y1),
+      bbox: PdfRect(x0: char.bbox.x0, y0: char.bbox.y0, x1: char.bbox.x1, y1: char.bbox.y1),
     );
   }
 
