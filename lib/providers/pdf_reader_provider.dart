@@ -609,6 +609,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     } else {
       if (scrollController.hasClients) {
         _scrollOffset = scrollController.offset;
+        // print(_scrollOffset);
         _mouseY = event.localPosition.dy;
         // scrollController.animateTo(_scrollOffset, duration: Duration(microseconds: 100), curve: Curves.bounceIn);
       }
@@ -969,6 +970,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     Offset localPosition,
     double dpr,
   ) {
+   
     final scale = state.globalScale;
     final stext = state.stextCache[pageIndex];
     if (stext == null) return;
@@ -987,19 +989,21 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
       scale,
     );
     final pos = TextSelectionAlgorithm.findNearestChar(lines, pdfX, pdfY);
+    // print(pos);
     // print('Selection pos: block ${pos.blockIndex}, line ${pos.lineIndex}, char ${pos.charIndex}');
     if (pos == sel.endPosition || pos == null) return;
-
-    if (sel.startPosition.blockIndex != pos.blockIndex) {
-      final startBlockY = stext.blocks[sel.startPosition.blockIndex].bbox.y0;
-      final endBlockY = stext.blocks[pos.blockIndex].bbox.y0;
-      final isDownward = sel.startPosition < pos;
+    // print('Selection updated: block ${pos.blockIndex}, line ${pos.lineIndex}, char ${pos.charIndex}');
+    // if (sel.startPosition.blockIndex != pos.blockIndex) {
+    //   final startBlockY = stext.blocks[sel.startPosition.blockIndex].bbox.y0;
+    //   final endBlockY = stext.blocks[pos.blockIndex].bbox.y0;
+    //   final isDownward = sel.startPosition < pos;
       
-      if (isDownward && endBlockY < startBlockY) return;
-      if (!isDownward && endBlockY > startBlockY) return;
-    }
+    //   if (isDownward && endBlockY < startBlockY) return;
+    //   if (!isDownward && endBlockY > startBlockY) return;
+    // }
     
     final result = _buildSelection(stext, sel.startPosition, pos, dpr, scale);
+    // print('Selected text: "${result.text}"');
     state = state.copyWith(
       pageSelections: {pageIndex: result},
     );

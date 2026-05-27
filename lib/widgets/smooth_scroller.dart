@@ -9,7 +9,10 @@ class SmoothScrollController extends ScrollController {
     super.initialScrollOffset,
     super.keepScrollOffset,
     super.debugLabel,
+    this.onOffsetChanged,
   });
+
+  final ValueChanged<double>? onOffsetChanged;
 
   @override
   ScrollPosition createScrollPosition(
@@ -24,6 +27,7 @@ class SmoothScrollController extends ScrollController {
       keepScrollOffset: keepScrollOffset,
       oldPosition: oldPosition,
       debugLabel: debugLabel,
+      onOffsetChanged: onOffsetChanged,
     );
   }
 }
@@ -36,7 +40,10 @@ class SmoothScrollPosition extends ScrollPositionWithSingleContext {
     super.keepScrollOffset,
     super.oldPosition,
     super.debugLabel,
+    this.onOffsetChanged,
   });
+
+  final ValueChanged<double>? onOffsetChanged;
 
   Ticker? _ticker;
   double _velocity = 0;
@@ -46,7 +53,7 @@ class SmoothScrollPosition extends ScrollPositionWithSingleContext {
   // 阻尼系数 (Drag)：表示 1 秒后剩余的速度比例。0.01 表示 1秒后几乎停下。值越大滑得越远。
   static const double dampling = 0.001;
   // 冲量敏感度：每次滚轮事件转化为速度的乘数。
-  static const double impulseMultiplier = 15.0;
+  static const double impulseMultiplier = 10.0;
   // static const double maxVelocity = 4000;
   static final double _lnDrag = log(dampling);
   static final double _invLnDrag = 1.0 / _lnDrag; // 预计算倒数，变除法为乘法
@@ -98,6 +105,7 @@ class SmoothScrollPosition extends ScrollPositionWithSingleContext {
 
     forcePixels(target);
     didUpdateScrollPositionBy(pixels - oldPixels);
+    onOffsetChanged?.call(pixels);
 
     if (pixels == oldPixels && deltaOffset.abs() > 1e-3) {
       _stopSimulation();
@@ -138,12 +146,14 @@ class _ScrollControllerHook extends Hook<ScrollController> {
     required this.initialScrollOffset,
     required this.keepScrollOffset,
     this.debugLabel,
+    this.onOffsetChanged,
     super.keys,
   });
 
   final double initialScrollOffset;
   final bool keepScrollOffset;
   final String? debugLabel;
+  final ValueChanged<double>? onOffsetChanged;
 
   @override
   HookState<ScrollController, Hook<ScrollController>> createState() =>
@@ -156,6 +166,7 @@ class _ScrollControllerHookState
     initialScrollOffset: hook.initialScrollOffset,
     keepScrollOffset: hook.keepScrollOffset,
     debugLabel: hook.debugLabel,
+    onOffsetChanged: hook.onOffsetChanged,
   );
 
   @override
@@ -175,6 +186,7 @@ ScrollController useSmoothScrollController({
   double initialScrollOffset = 0,
   bool keepScrollOffset = true,
   String? debugLabel,
+  ValueChanged<double>? onOffsetChanged,
   List<Object?>? keys,
 }) {
   return use(
@@ -182,6 +194,7 @@ ScrollController useSmoothScrollController({
       initialScrollOffset: initialScrollOffset,
       keepScrollOffset: keepScrollOffset,
       debugLabel: debugLabel,
+      onOffsetChanged: onOffsetChanged,
       keys: keys,
     ),
   );
