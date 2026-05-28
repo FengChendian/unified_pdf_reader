@@ -1,4 +1,4 @@
-import 'dart:ui' as ui;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -56,9 +56,9 @@ class PdfPageWidget extends HookConsumerWidget {
 
     final pageAnnotations = activeTabId != null
         ? ref.watch(
-            pdfReaderProvider(activeTabId).select(
-              (state) => state.pageAnnotations[pageIndex],
-            ),
+            pdfReaderProvider(
+              activeTabId,
+            ).select((state) => state.pageAnnotations[pageIndex]),
           )
         : null;
 
@@ -66,28 +66,30 @@ class PdfPageWidget extends HookConsumerWidget {
       if (pageAnnotations == null) return <Rect>[];
       return pageAnnotations
           .where((a) => a.type == 8) // PDF_ANNOT_HIGHLIGHT
-          .map((a) => Rect.fromLTRB(
-                TextSelectionAlgorithm.pdfToWidget(
-                  a.rect.x0,
-                  devicePixelRatio,
-                  scale,
-                ),
-                TextSelectionAlgorithm.pdfToWidget(
-                  a.rect.y0,
-                  devicePixelRatio,
-                  scale,
-                ),
-                TextSelectionAlgorithm.pdfToWidget(
-                  a.rect.x1,
-                  devicePixelRatio,
-                  scale,
-                ),
-                TextSelectionAlgorithm.pdfToWidget(
-                  a.rect.y1,
-                  devicePixelRatio,
-                  scale,
-                ),
-              ))
+          .map(
+            (a) => Rect.fromLTRB(
+              TextSelectionAlgorithm.pdfToWidget(
+                a.rect.x0,
+                devicePixelRatio,
+                scale,
+              ),
+              TextSelectionAlgorithm.pdfToWidget(
+                a.rect.y0,
+                devicePixelRatio,
+                scale,
+              ),
+              TextSelectionAlgorithm.pdfToWidget(
+                a.rect.x1,
+                devicePixelRatio,
+                scale,
+              ),
+              TextSelectionAlgorithm.pdfToWidget(
+                a.rect.y1,
+                devicePixelRatio,
+                scale,
+              ),
+            ),
+          )
           .toList();
     }, [pageAnnotations, scale, devicePixelRatio]);
 
@@ -114,7 +116,7 @@ class PdfPageWidget extends HookConsumerWidget {
     int originalHeight,
     double scale,
     double devicePixelRatio,
-    ui.Image? pageImage,
+    Uint8List? pageImage,
     PageTextSelection? selection,
     List<Rect> annotationHighlightRects,
     ValueNotifier<bool> isHoveringText,
@@ -132,27 +134,36 @@ class PdfPageWidget extends HookConsumerWidget {
     final pageWidth = originalWidth / devicePixelRatio * scale;
     final pageHeight = originalHeight / devicePixelRatio * scale;
 
-    Widget pageContent = SizedBox(
-      width: pageWidth,
-      height: pageHeight,
-      child: Container(
-        color: Colors.white,  
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: RawImage(
-                image: pageImage,
-                fit: BoxFit.fill,
-                filterQuality: FilterQuality.medium,
-              ),
-            ),
-            if (annotationHighlightRects.isNotEmpty)
-              CustomPaint(
-                painter: HighlightPainter(rects: annotationHighlightRects),
-              ),
-            if (selection != null && selection.highlightRects.isNotEmpty)
-              _buildSelectionHighlight(selection, scale),
-          ],
+    Widget pageContent = RepaintBoundary(
+      child: SizedBox(
+        width: pageWidth,
+        height: pageHeight,
+        child: Container(
+          color: Colors.white,
+
+          child: Stack(
+            children: [
+              if (pageImage != null)
+                // Positioned.fill(
+                // child:
+                Image.memory(
+                  pageImage,
+                  width: pageWidth,
+                  height: pageHeight,
+                  fit: BoxFit.contain,
+                  isAntiAlias: true,
+                  filterQuality: FilterQuality.low,
+                  gaplessPlayback: true,
+                ),
+              // ),
+              if (annotationHighlightRects.isNotEmpty)
+                CustomPaint(
+                  painter: HighlightPainter(rects: annotationHighlightRects),
+                ),
+              if (selection != null && selection.highlightRects.isNotEmpty)
+                _buildSelectionHighlight(selection, scale),
+            ],
+          ),
         ),
       ),
     );

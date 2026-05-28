@@ -41,8 +41,8 @@ class PdfReaderState {
   final SendPort? pdfSendPort;
   final bool isPageIndicatorVisible;
   final int displayedPage;
-  final Map<int, ui.Image> pageImages;
-  final Map<int, ui.Image> highResPageImages;
+  final Map<int, Uint8List> pageImages;
+  final Map<int, Uint8List> highResPageImages;
   final double viewportWidth;
   final int originalPagesMaxWidth;
   final bool isLoading;
@@ -106,8 +106,8 @@ class PdfReaderState {
     SendPort? pdfSendPort,
     bool? isPageIndicatorVisible,
     int? displayedPage,
-    Map<int, ui.Image>? pageImages,
-    Map<int, ui.Image>? highResPageImages,
+    Map<int, Uint8List>? pageImages,
+    Map<int, Uint8List>? highResPageImages,
     double? viewportWidth,
     bool clearFilePath = false,
     bool clearErrorMessage = false,
@@ -198,7 +198,7 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
   double _lastDevicePixelRatio = 1.0;
 
   static const double _separatorHeight = 10.0;
-  static const double _highResScaleFactor = 3.0;
+  static const double _highResScaleFactor = 4.0;
 
   static const int _highResWindowRadius = 2;
   static const Duration _highResRenderInterval = Duration(milliseconds: 100);
@@ -248,12 +248,6 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     _pdfReceivePort = null;
     _pdfSendPort = null;
 
-    for (final image in state.pageImages.values) {
-      image.dispose();
-    }
-    for (final image in state.highResPageImages.values) {
-      image.dispose();
-    }
     state = const PdfReaderState();
   }
 
@@ -302,19 +296,15 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
         final renderedPixedMap =
             initResult['renderedPixedMap'] as Map<int, Uint8List>? ?? {};
-        final pageImages = <int, ui.Image>{};
+        final pageImages = <int, Uint8List>{};
         for (final entry in renderedPixedMap.entries) {
           final pageIndex = entry.key;
           final data = entry.value;
           final pageSize = pageOriginalSizes[pageIndex];
           if (pageSize != null) {
-            final img = await _decodeImageFromPixels(
-              data,
-              pageSize[0],
-              pageSize[1],
-            );
-            if (img != null) {
-              pageImages[pageIndex] = img;
+            final pngBytes = await _encodeToPng(data, pageSize[0], pageSize[1]);
+            if (pngBytes != null) {
+              pageImages[pageIndex] = pngBytes;
             }
           }
         }
@@ -455,18 +445,18 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
   // ─── 图片解码 ──────────────────────────────────────────────────────────
 
-  Future<ui.Image?> _decodeImageFromPixels(
-    Uint8List data,
-    int width,
-    int height,
-  ) {
-    final completer = Completer<ui.Image?>();
+  Future<Uint8List?> _encodeToPng(Uint8List rawRgba, int width, int height) {
+    final completer = Completer<Uint8List?>();
     ui.decodeImageFromPixels(
-      data,
+      rawRgba,
       width,
       height,
       ui.PixelFormat.rgba8888,
-      (img) => completer.complete(img),
+      (img) async {
+        final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+        completer.complete(byteData?.buffer.asUint8List());
+        img.dispose();
+      },
     );
     return completer.future;
   }
@@ -505,9 +495,8 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
     if (toRemove.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         // if (toRemove.isEmpty) return;
-        final newHighRes = Map<int, ui.Image>.of(state.highResPageImages);
+        final newHighRes = Map<int, Uint8List>.of(state.highResPageImages);
         for (final idx in toRemove) {
-          newHighRes[idx]?.dispose();
           newHighRes.remove(idx);
         }
         state = state.copyWith(highResPageImages: newHighRes);
@@ -539,15 +528,16 @@ class PdfReaderNotifier extends Notifier<PdfReaderState> {
 
           final buffer =
               (result['data'] as TransferableTypedData).materialize();
-          final img = await _decodeImageFromPixels(
-            Uint8List.view(buffer),
+          final rawBytes = Uint8List.view(buffer);
+          final pngBytes = await _encodeToPng(
+            rawBytes,
             result['width'],
             result['height'],
           );
-          if (img == null) continue;
+          if (pngBytes == null) continue;
 
-          final newHighRes = Map<int, ui.Image>.of(state.highResPageImages);
-          newHighRes[pageIndex] = img;
+          final newHighRes = Map<int, Uint8List>.of(state.highResPageImages);
+          newHighRes[pageIndex] = pngBytes;
           state = state.copyWith(highResPageImages: newHighRes);
         } finally {
           // _currentlyRenderingPage = null;
